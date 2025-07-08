@@ -19,6 +19,7 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
+#include "postmaster/interrupt.h"
 #include "postmaster/monitoring.h"
 
 /*
@@ -35,7 +36,7 @@
  */
 
 
-//I take an example from walwriter (src/backend/postmaster/walwriter.c)
+//I take an example from walwriter (src/backend/postmaster/walwriter.c) and other backgrounds
 void 
 MonitoringProcessMain(char *startup_data, size_t startup_data_len) {
     //here i need to do some smart stuff
@@ -61,5 +62,44 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len) {
     * (what it needed for, what to do with it, should I create new one for this process, etc)
     * 
     */
+   /*
+    * Okay, just let it be
+    */
+    
+
+    pqsignal(SIGHUP, SignalHandlerForConfigReload);
+    /*
+    * SIGINT and SIGTERM are used for fast and smart shutdown
+    * 
+    * Actually, there's need to set up end-of-session request
+    * to client, using this process connection to monitor postgres server.
+    * So it's just for start, later it should be done properly.
+    * 
+    * There's also need to look at how it implemented at backend process,
+    * I suppose it would look somehow similar
+    */
+	pqsignal(SIGINT, SignalHandlerForShutdownRequest);
+	pqsignal(SIGTERM, SignalHandlerForShutdownRequest);
+	/* SIGQUIT handler was already set up by InitPostmasterChild */
+    pqsignal(SIGALRM, SIG_IGN);
+
+	/*
+    * For the first version, it's okay
+    * I suppose, later it would remind some kind of backend process...
+    * 
+    */
+    pqsignal(SIGPIPE, SIG_IGN);
+    /*
+    * Actually, I think it needs to look somehow another
+    * but it would be changed later, I'm tired now...
+    * ACTUALLY, I think it should be 
+    * combination of backends and (maybe) startup
+    * bc it's gonna be a mixture of background + backend
+    * 
+    */
+    pqsignal(SIGUSR1, SIG_IGN);
+	pqsignal(SIGUSR2, SIG_IGN);
+
+
 
 }
