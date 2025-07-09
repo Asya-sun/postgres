@@ -21,6 +21,7 @@
 #include "miscadmin.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/monitoring.h"
+#include "utils/memutils.h"
 
 /*
  * There sould be GUC parameters if they are needed
@@ -40,6 +41,8 @@
 void 
 MonitoringProcessMain(char *startup_data, size_t startup_data_len) {
     //here i need to do some smart stuff
+
+    MemoryContext monitoring_context;
 
     Assert(startup_data_len == 0);
 
@@ -99,6 +102,22 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len) {
     */
     pqsignal(SIGUSR1, SIG_IGN);
 	pqsignal(SIGUSR2, SIG_IGN);
+
+    /*
+	 * Reset some signals that are accepted by postmaster but not here
+     * 
+     * If in future this turns to be kind on server to give connections,
+     * it should be changed.
+	 */
+    pqsignal(SIGCHLD, SIG_DFL);
+
+    /*
+    * Create a memory context that we will do all our work in.
+    */
+    monitoring_context = AllocSetContextCreate(TopMemoryContext,
+											  "Monitoring Process",
+											  ALLOCSET_DEFAULT_SIZES);
+    MemoryContextSwitchTo(monitoring_context);
 
 
 
