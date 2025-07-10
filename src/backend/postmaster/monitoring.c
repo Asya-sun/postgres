@@ -35,7 +35,27 @@
 #include <errno.h>
 #include <arpa/inet.h>
 
-#define PORT 0x1235
+// for first version of gettion some data 
+#include "pgstat.h"
+#include "postgres.h"
+#include "storage/proc.h"
+#include "storage/procarray.h"
+#include "utils/ps_status.h"
+
+#include "replication/logicallauncher.h"
+#include "commands/dbcommands.h"
+#include "utils/acl.h"
+#include "catalog/pg_authid.h"
+#include "miscadmin.h"
+
+// for first stats data
+// define - они определены в каком-то ....c файле, поэтому их нельзя просто импортить (поэтому я вставила код сюда)
+// this staff is defined in some .c file (not header), so I've got to put it here
+#define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
+#define HAS_PGSTAT_PERMISSIONS(role)	 (has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS) || has_privs_of_role(GetUserId(), role))
+
+
+#define PORT 0x1237
 #define USERS_NUMBER 5
 #define BUFF_SIZE 256
 
@@ -43,6 +63,7 @@
  * There sould be GUC parameters if they are needed
  */
 
+void someActivityInfo(void);
 
 /*
  * Main entry point for monitoring process
@@ -60,6 +81,14 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
     //here i need to do some smart stuff
     MemoryContext monitoring_context;
     int counter = 0;
+
+    int server_socket;
+    int client_socket;
+    struct sockaddr_in server_sockaddr;
+    struct sockaddr_in client_sockaddr;
+    char buffer[BUFF_SIZE];
+    int error_check;
+    int reuse = 1;
 
     Assert(startup_data_len == 0);
 
@@ -154,16 +183,19 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
 	 */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
-    int server_socket;
-    int client_socket;
-    struct sockaddr_in server_sockaddr;
-    struct sockaddr_in client_sockaddr;
-    char buffer[BUFF_SIZE];
-    int error_check;
+    
+
 
     server_socket = socket(AF_INET, SOCK_DGRAM, 0);
     if (server_socket == -1) {
         elog(ERROR, "monitoring process: error socket()");
+        goto loop;
+    }
+
+    
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) == -1) {
+        elog(ERROR, "monitoring process: error setsockopt()");
+        close(server_socket);
         goto loop;
     }
 
@@ -183,7 +215,6 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
     
     while (1) {
         elog(LOG, "monitoring process: ready to hear messages");
-        printf("ready to hear messages\n");
         size_t len = sizeof(struct sockaddr);
         if (recvfrom(server_socket, buffer, BUFF_SIZE, 0, (struct sockaddr *) &client_sockaddr, (socklen_t *) &len) == -1) {
             elog(ERROR, "monitoring process: error recvfrom()");
@@ -193,6 +224,7 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
 
         elog(LOG, "monitoring process: message from client: %s", buffer);
 
+        someActivityInfo();
 
         if (sendto(server_socket, buffer, BUFF_SIZE, 0, (struct sockaddr *) &client_sockaddr, len) == -1) {
             elog(ERROR, "monitoring process: error sendto()");
@@ -219,4 +251,85 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
         pg_usleep( 3000L * 1000L);
     }
 
+}
+
+
+void someActivityInfo(void) {
+	int			num_backends = pgstat_fetch_stat_numbackends();
+	int			curr_backend;
+
+    elog(LOG, "got some activity info!");
+	for (curr_backend = 1; curr_backend <= num_backends; curr_backend++) {
+		LocalPgBackendStatus *local_beentry;
+		PgBackendStatus *beentry;
+		PGPROC	   *proc;
+		int32 leader_pid = 0;
+		char *clipped_activity;
+		char *type = "null";
+		TimestampTz startProcTime = NULL;
+		/* Get the next one in the list */
+		local_beentry = pgstat_get_local_beentry_by_index(curr_backend);
+		beentry = &local_beentry->backendStatus;
+
+		switch (beentry->st_backendType)
+		{
+			case B_ARCHIVER:
+				type = "B_ARCHIVER";
+				break;
+			case B_BG_WRITER:
+				type = "B_BG_WRITER";
+				break;
+			case B_CHECKPOINTER:
+				type = "B_CHECKPOINTER";
+				break;
+			case B_STARTUP:
+				type = "B_STARTUP";
+				break;	
+            case B_MONITORING:
+				type = "B_MONITORING";
+				break;	
+			default:
+				type = "NULL";
+				break;
+		}
+
+		
+
+			clipped_activity = pgstat_clip_activity(beentry->st_activity_raw);
+			proc = BackendPidGetProc(beentry->st_procpid);
+			if (proc == NULL && (beentry->st_backendType != B_BACKEND))
+			{
+				/*
+				 * For an auxiliary process, retrieve process info from
+				 * AuxiliaryProcs stored in shared-memory.
+				 */
+				proc = AuxiliaryPidGetProc(beentry->st_procpid);
+			}
+			if (proc != NULL)
+			{
+				uint32		raw_wait_event;
+				PGPROC	   *leader;
+				raw_wait_event = UINT32_ACCESS_ONCE(proc->wait_event_info);
+				leader = proc->lockGroupLeader;
+				/*
+				 * Show the leader only for active parallel workers.  This
+				 * leaves the field as NULL for the leader of a parallel group
+				 * or the leader of parallel apply workers.
+				 */
+				if (leader && leader->pid != beentry->st_procpid)
+				{
+					leader_pid = leader->pid;
+				}
+				else if (beentry->st_backendType == B_BG_WORKER)
+				{
+					leader_pid = GetLeaderApplyWorkerPid(beentry->st_procpid);
+				}
+			}
+			// it might be 0
+			startProcTime = beentry->st_proc_start_timestamp;
+			elog(LOG, "[Recovery] PID=%d LEADER_PID=%d StartTime=%ld BACKEND_TYPE=%s", 
+				proc->pid, leader_pid, (long)startProcTime, type);
+			pfree(clipped_activity);
+	
+	}
 }
