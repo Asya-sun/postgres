@@ -25,6 +25,20 @@
 #include "postmaster/monitoring.h"
 #include "utils/memutils.h"
 
+// for first version of server
+#include <stdio.h>
+#include <sys/socket.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <errno.h>
+#include <arpa/inet.h>
+
+#define PORT 0x1235
+#define USERS_NUMBER 5
+#define BUFF_SIZE 256
+
 /*
  * There sould be GUC parameters if they are needed
  */
@@ -140,9 +154,63 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
 	 */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
+    int server_socket;
+    int client_socket;
+    struct sockaddr_in server_sockaddr;
+    struct sockaddr_in client_sockaddr;
+    char buffer[BUFF_SIZE];
+    int error_check;
+
+    server_socket = socket(AF_INET, SOCK_DGRAM, 0);
+    if (server_socket == -1) {
+        elog(ERROR, "monitoring process: error socket()");
+        goto loop;
+    }
+
+    memset(&server_sockaddr, 0, sizeof(struct sockaddr));
+    server_sockaddr.sin_family = AF_INET;
+    server_sockaddr.sin_port = htons(PORT);
+    inet_pton(AF_INET, "127.0.8.2", &server_sockaddr.sin_addr);
+    bzero(&(server_sockaddr.sin_zero),8);
+
+    error_check = bind(server_socket, (struct sockaddr *) &server_sockaddr, sizeof (server_sockaddr));
+    if (error_check == -1) {
+        elog(ERROR, "monitoring process: error bind()");
+        close(server_socket);
+        goto loop;
+    }
+
+    
+    while (1) {
+        elog(LOG, "monitoring process: ready to hear messages");
+        printf("ready to hear messages\n");
+        size_t len = sizeof(struct sockaddr);
+        if (recvfrom(server_socket, buffer, BUFF_SIZE, 0, (struct sockaddr *) &client_sockaddr, (socklen_t *) &len) == -1) {
+            elog(ERROR, "monitoring process: error recvfrom()");
+            close(server_socket);
+            goto loop;
+        }
+
+        elog(LOG, "monitoring process: message from client: %s", buffer);
+
+
+        if (sendto(server_socket, buffer, BUFF_SIZE, 0, (struct sockaddr *) &client_sockaddr, len) == -1) {
+            elog(ERROR, "monitoring process: error sendto()");
+            close(server_socket);
+            goto loop;
+        }
+
+        elog(LOG, "monitoring process:message was sent to client");
+    }
+
+
+    close(client_socket);
+    close(server_socket);
+
     /*
 	 * Loop forever
 	 */
+    loop:
 	for (;;)
 	{
         elog(LOG, "monitoring process is working now!!! counter = %d", counter);
