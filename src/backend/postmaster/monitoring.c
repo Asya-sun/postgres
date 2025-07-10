@@ -18,7 +18,9 @@
 // 
 #include "postgres.h"
 
+#include "libpq/pqsignal.h"
 #include "miscadmin.h"
+#include "postmaster/auxprocess.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/monitoring.h"
 #include "utils/memutils.h"
@@ -39,10 +41,11 @@
 
 //I take an example from walwriter (src/backend/postmaster/walwriter.c) and other backgrounds
 void 
-MonitoringProcessMain(char *startup_data, size_t startup_data_len) {
+MonitoringProcessMain(char *startup_data, size_t startup_data_len) 
+{
     //here i need to do some smart stuff
-
     MemoryContext monitoring_context;
+    int counter = 0;
 
     Assert(startup_data_len == 0);
 
@@ -50,6 +53,8 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len) {
     // here might be questions about pgstat_initialize(), ReplicationSlotInitialize, etc
     // but might not!
 	AuxiliaryProcessMainCommon();
+
+    elog(LOG, "monitoring process pid = %d", MyProcPid);
 
     /*
     * This is time to ... with signal and signal handlers
@@ -120,5 +125,30 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len) {
     MemoryContextSwitchTo(monitoring_context);
 
 
+
+    /*
+    * Later, when logic will became clearer,  maybe 
+    * it would be need to set up sigsetjmp() for exception handling
+    * May check e.g. WalSummarizerMain (src/backend/postmaster/walsummarizer.c)
+    * or CheckpointerMain (src/backend/postmaster/checkpointer.c)
+    * 
+    * On the other hand, there's no such stuff at WalReceiverMain (src/backend/replication/walreceiver.c) 
+    */
+
+    /*
+	 * Unblock signals (they were blocked when the postmaster forked us)
+	 */
+	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
+
+    /*
+	 * Loop forever
+	 */
+	for (;;)
+	{
+        elog(LOG, "monitoring process is working now!!! counter = %d", counter);
+        // elog(LOG, "monitoring line: %d", __LINE__);
+        counter += 1;
+        pg_usleep( 3000L * 1000L);
+    }
 
 }

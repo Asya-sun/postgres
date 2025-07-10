@@ -247,7 +247,8 @@ static pid_t StartupPID = 0,
 			AutoVacPID = 0,
 			PgArchPID = 0,
 			SysLoggerPID = 0,
-			SlotSyncWorkerPID = 0;
+			SlotSyncWorkerPID = 0,
+			MonitoringPID = 0;
 
 /* Startup process's status */
 typedef enum
@@ -1359,6 +1360,8 @@ PostmasterMain(int argc, char *argv[])
 		CheckpointerPID = StartChildProcess(B_CHECKPOINTER);
 	if (BgWriterPID == 0)
 		BgWriterPID = StartChildProcess(B_BG_WRITER);
+	if (MonitoringPID == 0)
+		MonitoringPID = StartChildProcess(B_MONITORING);
 
 	/*
 	 * We're ready to rock and roll...

@@ -315,6 +315,9 @@ GetBackendTypeDesc(BackendType backendType)
 		case B_WAL_WRITER:
 			backendDesc = "walwriter";
 			break;
+		case B_MONITORING:
+			backendDesc = "monitoring process";
+			break;
 	}
 
 	return backendDesc;
