@@ -65,6 +65,8 @@
 
 void someActivityInfo(void);
 
+int formActivityInfo(char *buffer, Size max_size);
+
 /*
  * Main entry point for monitoring process
  *
@@ -214,6 +216,14 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
 
     
     while (1) {
+        /*
+        * 126 bc I think it's enough for 1 string for 1 backend
+        */
+        int sent_num = 0;
+        Size message_size = pgstat_fetch_stat_numbackends() * 126;
+        char *message = palloc(message_size);
+        int res_size = 0;
+
         elog(LOG, "monitoring process: ready to hear messages");
         size_t len = sizeof(struct sockaddr);
         if (recvfrom(server_socket, buffer, BUFF_SIZE, 0, (struct sockaddr *) &client_sockaddr, (socklen_t *) &len) == -1) {
@@ -224,15 +234,17 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
 
         elog(LOG, "monitoring process: message from client: %s", buffer);
 
-        someActivityInfo();
+        res_size = formActivityInfo(message, message_size);
+        elog(LOG, "monitoring process: res_size: %d\n\t\tmessage to client: %s",res_size, message);
 
-        if (sendto(server_socket, buffer, BUFF_SIZE, 0, (struct sockaddr *) &client_sockaddr, len) == -1) {
+        if ((sent_num = sendto(server_socket, message, res_size, 0, (struct sockaddr *) &client_sockaddr, len)) == -1) {
             elog(ERROR, "monitoring process: error sendto()");
             close(server_socket);
             goto loop;
         }
 
-        elog(LOG, "monitoring process:message was sent to client");
+        elog(LOG, "monitoring process:message was sent to client: %d", sent_num);
+        pfree(message);
     }
 
 
@@ -259,6 +271,7 @@ void someActivityInfo(void) {
 	int			curr_backend;
 
     elog(LOG, "got some activity info!");
+    elog(LOG, "num of backednds: %d", num_backends);
 	for (curr_backend = 1; curr_backend <= num_backends; curr_backend++) {
 		LocalPgBackendStatus *local_beentry;
 		PgBackendStatus *beentry;
@@ -285,6 +298,15 @@ void someActivityInfo(void) {
 			case B_STARTUP:
 				type = "B_STARTUP";
 				break;	
+            case B_WAL_WRITER:
+				type = "B_WAL_WRITER";
+				break;
+            case B_WAL_SUMMARIZER:
+				type = "B_WAL_SUMMARIZER";
+				break;	
+            case B_WAL_RECEIVER:
+				type = "B_WAL_RECEIVER";
+				break;	
             case B_MONITORING:
 				type = "B_MONITORING";
 				break;	
@@ -292,7 +314,6 @@ void someActivityInfo(void) {
 				type = "NULL";
 				break;
 		}
-
 		
 
 			clipped_activity = pgstat_clip_activity(beentry->st_activity_raw);
@@ -332,4 +353,97 @@ void someActivityInfo(void) {
 			pfree(clipped_activity);
 	
 	}
+}
+
+
+int formActivityInfo(char *buffer, Size max_size) {
+    int			num_backends = pgstat_fetch_stat_numbackends();
+	int			curr_backend;
+
+    memset(buffer, 0, max_size);
+
+    pg_sprintf(buffer,"num of backednds: %d\n", num_backends);
+
+    for (curr_backend = 1; curr_backend <= num_backends; curr_backend++) {
+		LocalPgBackendStatus *local_beentry;
+		PgBackendStatus *beentry;
+		PGPROC	   *proc;
+		int32 leader_pid = 0;
+		char *clipped_activity;
+		char *type = "null";
+		TimestampTz startProcTime = NULL;
+		/* Get the next one in the list */
+		local_beentry = pgstat_get_local_beentry_by_index(curr_backend);
+		beentry = &local_beentry->backendStatus;
+
+		switch (beentry->st_backendType)
+		{
+			case B_ARCHIVER:
+				type = "B_ARCHIVER";
+				break;
+			case B_BG_WRITER:
+				type = "B_BG_WRITER";
+				break;
+			case B_CHECKPOINTER:
+				type = "B_CHECKPOINTER";
+				break;
+			case B_STARTUP:
+				type = "B_STARTUP";
+				break;	
+            case B_WAL_WRITER:
+				type = "B_WAL_WRITER";
+				break;
+            case B_WAL_SUMMARIZER:
+				type = "B_WAL_SUMMARIZER";
+				break;	
+            case B_WAL_RECEIVER:
+				type = "B_WAL_RECEIVER";
+				break;	
+            case B_MONITORING:
+				type = "B_MONITORING";
+				break;	
+			default:
+				type = "NULL";
+				break;
+		}
+		
+
+			clipped_activity = pgstat_clip_activity(beentry->st_activity_raw);
+			proc = BackendPidGetProc(beentry->st_procpid);
+			if (proc == NULL && (beentry->st_backendType != B_BACKEND))
+			{
+				/*
+				 * For an auxiliary process, retrieve process info from
+				 * AuxiliaryProcs stored in shared-memory.
+				 */
+				proc = AuxiliaryPidGetProc(beentry->st_procpid);
+			}
+			if (proc != NULL)
+			{
+				uint32		raw_wait_event;
+				PGPROC	   *leader;
+				raw_wait_event = UINT32_ACCESS_ONCE(proc->wait_event_info);
+				leader = proc->lockGroupLeader;
+				/*
+				 * Show the leader only for active parallel workers.  This
+				 * leaves the field as NULL for the leader of a parallel group
+				 * or the leader of parallel apply workers.
+				 */
+				if (leader && leader->pid != beentry->st_procpid)
+				{
+					leader_pid = leader->pid;
+				}
+				else if (beentry->st_backendType == B_BG_WORKER)
+				{
+					leader_pid = GetLeaderApplyWorkerPid(beentry->st_procpid);
+				}
+			}
+			startProcTime = beentry->st_proc_start_timestamp;
+            pg_sprintf(buffer + strlen(buffer), "PID=%d StartTime=%ld BACKEND_TYPE=%s\n", 
+				proc->pid, (long)startProcTime, type);
+			pfree(clipped_activity);
+	
+	}
+
+    return(strlen(buffer));
 }
