@@ -10,6 +10,8 @@
 #ifndef MONITOR_EVENT_TYPES_H
 #define MONITOR_EVENT_TYPES_H
 
+#include "postgres.h"
+
 /*
  * Итак, как должно выглядеть событие?
  * 
@@ -33,6 +35,21 @@ typedef enum MonitorEvent {
     ME_B,
     ME_C,
 } MonitorEvent;
+
+#define MONITOR_EVENT_NUM_TYPES ME_C + 1
+
+
+struct MonitorEventSet {
+    pgsocket fd;
+
+    int nevents;        /* number of registered events*/
+
+    /*
+     * Array, of nevents length, storing the definition of events
+     * this set is waiting for.
+     */
+    MonitorEvent *events;
+};
 
 
 #endif                          /* MONITOR_EVENT_TYPES_H */
