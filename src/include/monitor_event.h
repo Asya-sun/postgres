@@ -12,7 +12,7 @@
 
 #include "postgres.h"
 
-#include "latch.h"
+#include "storage/latch.h"
 #include "nodes/pg_list.h"
 #include "utils/monitor_event_types.h"
 
@@ -29,7 +29,8 @@
 typedef struct MonitorEventSet MonitorEventSet;
 
 
-extern void InitializeMonitorEventSystem(void);
+extern Size MonitorShmemSize(void);
+extern void MonitorEventSystemInit(void);
 
 /* all this is under question */
 extern MonitorEventSet *CreateMonitorEventSet(int event_num);
@@ -170,6 +171,17 @@ extern EventToSubscriberSet *eventToSubscriberSet;
  * 
  */
 
+
+/*
+ * На завтра 
+ * разобраться MonitorEventSet или просто MonitorEvent для подписки
+ * (может, можно сделать 2 интерфейса?)
+ * доп поля во всяких подписчик - подписка - ... (еще это в целом можно сделать по ходу)
+ * подписка
+ * отписка(?) - такой интерфейс тоже мб нужен...
+ * начать уведомление
+ * 
+ */
 
 
 #endif                          /* MONITOR_EVENT_H */

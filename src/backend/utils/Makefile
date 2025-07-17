@@ -25,6 +25,7 @@ SUBDIRS     = \
 	mb \
 	misc \
 	mmgr \
+	monitor \
 	resowner \
 	sort \
 	time

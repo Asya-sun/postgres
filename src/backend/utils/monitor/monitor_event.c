@@ -12,6 +12,9 @@
 #include "monitor_event.h"
 #include "storage/shmem.h"
 
+Size monitor_entry_init_size(void);
+Size monitor_entries_subref_size(void);
+Size monitor_subscriptions_size(void);
 
 
 /*
@@ -31,7 +34,7 @@ monitor_entry_init_size(void) {
 }
 
 Size
-monitor_entries_subref_size() {
+monitor_entries_subref_size(void) {
     Size sz;
 
     sz = MONITOR_EVENT_NUM_TYPES * MAX_SUBSCRIBERS_PER_EVENT * sizeof(MonitorSubscription_Ref);
@@ -39,7 +42,7 @@ monitor_entries_subref_size() {
 }
 
 Size
-monitor_subscriptions_size() {
+monitor_subscriptions_size(void) {
     Size sz;
 
     sz = MAX_SUBSCRIBERS * sizeof(MonitorSubscription);
@@ -76,21 +79,21 @@ MonitorShmemSize(void) {
  */
 
 void 
-InitializeMonitorEventSystem(void) {
+MonitorEventSystemInit(void) {
     bool        found;
     Size        sz;
 
     sz = MonitorShmemSize();
-    eventToSubscriberSet = (MonitorEventSet *)
+    eventToSubscriberSet = (EventToSubscriberSet *)
         ShmemInitStruct("Shared Memory Monitor Event Subsystem", sz, &found);
 
     /* Actually, it would be better with checks like " if (isUnderPostmaster) ", etc. */
     if (!found) {
-        Size sz;
+        sz = 0;
         char *p = (char *)(eventToSubscriberSet + 
             add_size(MAXALIGN(sizeof(EventToSubscriberSet)), monitor_entry_init_size()));
 
-        eventToSubscriberSet->subscriptions = NIL;
+        eventToSubscriberSet->subscriptions = NULL;
         eventToSubscriberSet->etsentries = (EventToSubscriberEntry*)
             ((char*)eventToSubscriberSet + MAXALIGN(sizeof(EventToSubscriberSet)));
         eventToSubscriberSet->max_nsubscription = MAX_SUBSCRIBERS;
