@@ -24,11 +24,9 @@
  * This structure is needed to simplify procedure of subscription to many
  * events at once.
  * 
- * Если событие - бит, то MonitorEventSet - битовая маска
- * Если событие - enum / структура, то MonitorEventSet - как минимум массив
+ * and this is under question
  */
 typedef struct MonitorEventSet MonitorEventSet;
-
 
 extern Size MonitorShmemSize(void);
 extern void MonitorEventSystemInit(void);
@@ -40,6 +38,27 @@ extern int	AddMonitorEventToSet(MonitorEventSet *set, uint32 events, pgsocket fd
 extern int SubscribeToMonitorEventSet(MonitorEventSet *set, pgsocket fd);
 
 extern int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd);
+/* 
+ * Maybe this one need to have pid in params 
+ * In case it would cleared from random process 
+ */
+/* 
+ * Params:
+ * pid - in case another process would clear some processes dead subscriptions
+ * fd - the socket used for getting messages
+ * 
+ * return value:
+ * 0 is success
+ * 1 means there isn't such subscriber  
+ */
+extern int UnsubscribeFromMonitorEvent(MonitorEvent event, pgsocket fd, pid_t pid);
+/* 
+ * отписаться от всех событий 1 процессом, или 1 процессом с 1 сокетом... щищ 
+ * pid - in case another process would clear some processes dead subscriptions
+ * fd - get the right fd, if you'd like to unsubscribe from all events with
+ * the exact fd, or PGINVALID_SOCKET if you'd like to unsubscribe from all events
+ */
+extern void UnsubscribeFromAllMonitorEvents(pid_t pid, pgsocket fd);
 extern void NotifyMonitorEvent(void);
 
 /*
@@ -110,8 +129,8 @@ typedef struct MonitorSubscriber
 typedef struct MonitorSubscription
 {
     LWLock lock;
-    /* flag needed for clearing array of subscriprions*/
-    bool is_free;
+    int ref_count;
+    // сюда бы вместо is_free добавить счетчик ссылок (количество ивентов, на которые подписан данный пописчик)
     
     // should it be pointer or just structure?..
     MonitorSubscriber subscriber;
@@ -120,10 +139,6 @@ typedef struct MonitorSubscription
 typedef MonitorSubscription*  MonitorSubscription_Ref;
 
 typedef struct EventToSubscriberEntry {
-    /*
-     * There would be question if (MonitorEvent) or (MonitorEvent *)
-     * just bc of where to keep this structure.
-     */
     MonitorEvent event;
 
     /* number of subscribers to this kind of event*/
@@ -176,10 +191,9 @@ extern EventToSubscriberSet *eventToSubscriberSet;
 
 /*
  * На завтра 
- * разобраться MonitorEventSet или просто MonitorEvent для подписки
+ * ? разобраться MonitorEventSet или просто MonitorEvent для подписки
  * (может, можно сделать 2 интерфейса?)
- * доп поля во всяких подписчик - подписка - ... (еще это в целом можно сделать по ходу)
- * подписка
+ * ? доп поля во всяких подписчик - подписка - ... (еще это в целом можно сделать по ходу)
  * отписка(?) - такой интерфейс тоже мб нужен...
  * начать уведомление
  * 
