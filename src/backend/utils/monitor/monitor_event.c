@@ -125,7 +125,6 @@ MonitorEventSystemInit(void) {
         /* maybe here need to initialize subscriptions... */
 
         for (int i = 0; i < MAX_SUBSCRIBERS; i++) {
-            eventToSubscriberSet->subscriptions[i].is_free = true;
             eventToSubscriberSet->subscriptions[i].ref_count = 0;
             eventToSubscriberSet->subscriptions[i].subscriber.fd = -1;
             eventToSubscriberSet->subscriptions[i].subscriber.pid = 0;
