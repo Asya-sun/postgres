@@ -10,7 +10,10 @@
  */
 
 #include "monitor_event.h"
+#include "utils/monitor_event_types.h"
+#include "storage/lwlock.h"
 #include "storage/shmem.h"
+#include "miscadmin.h"
 
 Size monitor_entry_init_size(void);
 Size monitor_entries_subref_size(void);
@@ -89,9 +92,9 @@ MonitorEventSystemInit(void) {
 
     /* Actually, it would be better with checks like " if (isUnderPostmaster) ", etc. */
     if (!found) {
-        sz = 0;
         char *p = (char *)(eventToSubscriberSet + 
             add_size(MAXALIGN(sizeof(EventToSubscriberSet)), monitor_entry_init_size()));
+        sz = 0;
 
         eventToSubscriberSet->subscriptions = NULL;
         eventToSubscriberSet->etsentries = (EventToSubscriberEntry*)
@@ -101,10 +104,16 @@ MonitorEventSystemInit(void) {
 
         /* Initialization of entries */          
         for (int i = 0; i < MONITOR_EVENT_NUM_TYPES; i++) {
+            EventToSubscriberEntry entry = eventToSubscriberSet->etsentries[i];
             eventToSubscriberSet->etsentries[i].event = i;
             eventToSubscriberSet->etsentries[i].nsubscribtion = 0;
             eventToSubscriberSet->etsentries[i].max_nsubscriptions = MAX_SUBSCRIBERS_PER_EVENT;
             eventToSubscriberSet->etsentries[i].subscribtion_refs = (MonitorSubscription_Ref *) p;
+
+            /* set all refs to subscriptions to NULL*/
+            for (size_t i = 0; i < MAX_SUBSCRIBERS_PER_EVENT; i++) {
+                entry.subscribtion_refs[i] = NULL;
+            }            
 
             p = p + MAX_SUBSCRIBERS_PER_EVENT * sizeof(MonitorSubscription_Ref);
         }
@@ -122,7 +131,9 @@ MonitorEventSystemInit(void) {
         /* maybe here need to initialize subscriptions... */
 
         for (int i = 0; i < MAX_SUBSCRIBERS; i++) {
-            // ...
+            eventToSubscriberSet->subscriptions[i].is_free = true;
+            eventToSubscriberSet->subscriptions[i].subscriber.fd = -1;
+            eventToSubscriberSet->subscriptions[i].subscriber.pid = 0;
         }
     }
 }
@@ -134,3 +145,136 @@ MonitorEventSystemInit(void) {
  *  CreateOrAttachShmemStructs - тут можно взять примеры всяких штук, 
  *  к которым доступаются через разделяемую память, и посмотреть, как доступаться к моей структуре
  */
+
+/*
+ * Подписка на событие
+ * подписка на событие  = добавление в "таблицу подписчиков и событий" + создание "передатчика"
+ * 
+ * Все это нужно потом переделать с локами, но пока пусть будет хотя бы так
+ * 
+ * return 0 if everything is fine, else 1
+ */
+int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd) {
+    // по хорошему бы проверка, норм сокет или нет
+    // хотя это можно и оставить на совести вызывающего функцию =)
+
+    // проверка на валидность pid
+
+    // проверка что event - реально MonitorEvent
+
+    MonitorSubscription_Ref subscriprion_ref = NULL;
+    MonitorSubscription_Ref prev_ref = NULL;
+    EventToSubscriberEntry *entry = NULL;
+    MonitorSubscriber subscriber;
+    subscriber.fd = fd;
+    subscriber.pid = MyProcPid;
+
+    // добавление в таблицу подписок
+
+    /* check, if the subscriber in array already */
+    for (int i = 0; i < MAX_SUBSCRIBERS; i++) {
+        MonitorSubscription_Ref ref = &(eventToSubscriberSet->subscriptions[i]);
+        LWLockAcquire(&(ref->lock), LW_EXCLUSIVE);
+        if (prev_ref != NULL) {
+            LWLockRelease(&(prev_ref->lock));
+        }
+        if (ref->subscriber.pid == subscriber.pid && ref->subscriber.fd == subscriber.fd) {
+            subscriprion_ref = ref;
+            ref->is_free = false;
+
+            LWLockRelease(&(ref->lock));
+            break;
+        }
+        prev_ref = ref;
+        /* if it's last iteration, free last lock*/
+        if (i == MAX_SUBSCRIBERS) {
+            LWLockRelease(&(ref->lock));
+        }
+    }
+
+    /*
+     * if needed subscriber isn't in array already,
+     * then we find free place and take it!
+     */    
+    if (subscriprion_ref == NULL) {
+        prev_ref = NULL;
+        if (eventToSubscriberSet->nsubscription == eventToSubscriberSet->max_nsubscription) {
+            /* every subscriptin slot is busy */
+            return 1;
+        }
+
+        /*
+         * a b c
+         * берем b
+         * освобождаем a
+         * работаем с b
+         * берем с 
+         * освобождаем b
+         * ...
+         */
+        for (int i = 0; i < MAX_SUBSCRIBERS; i++) {
+            MonitorSubscription_Ref ref = &(eventToSubscriberSet->subscriptions[i]);
+            LWLockAcquire(&(ref->lock), LW_EXCLUSIVE);
+            if (prev_ref != NULL) {
+                LWLockRelease(&(prev_ref->lock));
+            }
+            if (ref->is_free) {
+                ref->is_free = false;
+                ref->subscriber.fd = fd;
+                ref->subscriber.pid = MyProcPid;
+
+                subscriprion_ref = ref;
+                LWLockRelease(&(ref->lock));
+                break;
+            }
+
+            prev_ref = ref;
+            /* if it's last iteration, free last lock*/
+            if (i == MAX_SUBSCRIBERS) {
+                LWLockRelease(&(ref->lock));
+            }
+        }
+
+    }
+
+
+
+
+    // добавление ссылки на подписку в записи о событии
+    entry = &(eventToSubscriberSet->etsentries[event]);
+    LWLockAcquire(&(entry->lock), LW_EXCLUSIVE);
+    // НЕ ЗАБЫТЬ УБРАТЬ ЛОЧКУ
+    entry->nsubscribtion++;
+    for (int i = 0; i < entry->max_nsubscriptions; i++) {
+        MonitorSubscription_Ref ref = entry->subscribtion_refs[i];
+        // если ссылка не нулевая, смотрим
+        if (ref != NULL) {
+            /* 
+             * if this ref is already ref to needed subscription,
+             * it means the subscriber is already in subscription ref array
+             */
+            if (ref == subscriprion_ref) {
+                LWLockRelease(&(entry->lock));
+                return 0;
+            }
+
+            /*
+             * if ref is ref to free subscription, 
+             */
+            if (ref->is_free) {
+                ref = subscriprion_ref;
+                LWLockRelease(&(entry->lock));
+                return 0;
+            }
+        }
+
+        /* if ref = NULL, it means place is free */
+        if (ref == NULL) {
+            ref = subscriprion_ref;
+            LWLockRelease(&(entry->lock));
+            return 0;
+        }
+    } 
+
+    return 1;
+}

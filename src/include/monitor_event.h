@@ -13,6 +13,7 @@
 #include "postgres.h"
 
 #include "storage/latch.h"
+#include "storage/lwlock.h"
 #include "nodes/pg_list.h"
 #include "utils/monitor_event_types.h"
 
@@ -38,7 +39,7 @@ extern void FreeMonitorEventSet(MonitorEventSet *set);
 extern int	AddMonitorEventToSet(MonitorEventSet *set, uint32 events, pgsocket fd);
 extern int SubscribeToMonitorEventSet(MonitorEventSet *set, pgsocket fd);
 
-extern int SubscribeToMonitorEvent(MonitorEvent *event, pgsocket fd);
+extern int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd);
 extern void NotifyMonitorEvent(void);
 
 /*
@@ -67,8 +68,6 @@ extern void NotifyMonitorEvent(void);
  * а потому на данный момент это вполне рациональное решение
  * 3 буфер сокета переполнен => данные теряются - но это уже ответственность процесса, как часто проверять событие
  * 
- * а если сделать реверсивно - подписчики, и каждому подписчику добавлять битовую маску сигналов, которую ему нужно отправлять?
- * 
  * что будет приходить в датаграмме(уведомлении о событии?)
  * 
  */
@@ -87,40 +86,35 @@ extern void NotifyMonitorEvent(void);
  * и пользователю будет лишь возвращаться необходимый сокет, и пусть пользователь сам на нем ждет
  * А еще можно подписываться
  * 
- * 2 варианта
- * 1) event = bit, eventset = bitmask, тогда создать битову маску 
- * нетрудозатратно, и 
- * 2) event = number, eventset = array*, тогда создание битовой маски - дело пропащее,
- * а значит, 
- * 
- * а почему вообще эта штука должна создавать сокет? с какой стати это ее ответственность?
- * пользователю надо - пусть он его и создает, и все проблемы!
- * тогда в любом случае - какой бы eventset ни был, не нужно создавать сокеты
+ * Пользователь создает сокет и передает его в параметрах
  * 
  * Если пользователь будет все равно сам создавать сокет, то можно и не делать штуку с сетом событий
  * Можно подписываться как на сет, так и на одно событие (можно такой интерфейс добавить в целом)
  * Подписываться на сет имеет смысл сразу, если там в этом сете будет какая-то экстра информация об обработке событий, etc
  * 
- * тогда в описании subscriber должно быть поле socket 
- * 
  * в целом, если пока сет не нужен и пользователь будет передавать свой файловый дескриптор, то можно
  * пока что сет и не создавать
  * 
+ * Окей, в целом, если что, эту функциональность добавить будет не сложно
+ * (создание сокета), поэтому сейчас не паримся
  */
 
 typedef struct MonitorSubscriber
 {
     pgsocket	fd;	
+
+    pid_t pid;
     /* Тут бы по хорошему иметь еще какую-то метаинформацию */
 } MonitorSubscriber;
 
 typedef struct MonitorSubscription
 {
+    LWLock lock;
     /* flag needed for clearing array of subscriprions*/
-    bool is_active;
+    bool is_free;
     
+    // should it be pointer or just structure?..
     MonitorSubscriber subscriber;
-
 } MonitorSubscription;
 
 typedef MonitorSubscription*  MonitorSubscription_Ref;
@@ -136,6 +130,12 @@ typedef struct EventToSubscriberEntry {
     int nsubscribtion;
     int max_nsubscriptions;
 
+    /* 
+     * lock is needed when working with subscribtion_refs
+     * maybe it would be better change later on another synchronization primitive (mechanism)
+     */
+    LWLock lock;
+
     MonitorSubscription_Ref *subscribtion_refs;
 } EventToSubscriberEntry;
 
@@ -148,8 +148,10 @@ typedef struct EventToSubscriberSet {
     MonitorSubscription *subscriptions;
 } EventToSubscriberSet;
 
+
 /* I'm not sure about extern, but curently it's okay*/
 extern EventToSubscriberSet *eventToSubscriberSet;
+
 /*
  * SubscriberToEvent
  * информация по подписчику не дублируется
