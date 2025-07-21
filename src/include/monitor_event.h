@@ -15,7 +15,16 @@
 #include "storage/latch.h"
 #include "storage/lwlock.h"
 #include "nodes/pg_list.h"
+#include "utils/datetime.h"
 #include "utils/monitor_event_types.h"
+
+#include <sys/un.h> 
+#include <sys/socket.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define MAX_SUBSCRIBERS 64
 #define MAX_SUBSCRIBERS_PER_EVENT 64
@@ -37,7 +46,7 @@ extern void FreeMonitorEventSet(MonitorEventSet *set);
 extern int	AddMonitorEventToSet(MonitorEventSet *set, uint32 events, pgsocket fd);
 extern int SubscribeToMonitorEventSet(MonitorEventSet *set, pgsocket fd);
 
-extern int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd);
+extern int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd, struct sockaddr_un address);
 /* 
  * Maybe this one need to have pid in params 
  * In case it would cleared from random process 
@@ -59,7 +68,7 @@ extern int UnsubscribeFromMonitorEvent(MonitorEvent event, pgsocket fd, pid_t pi
  * the exact fd, or PGINVALID_SOCKET if you'd like to unsubscribe from all events
  */
 extern void UnsubscribeFromAllMonitorEvents(pid_t pid, pgsocket fd);
-extern void NotifyMonitorEvent(void);
+void NotifyMonitorEvent(MonitorEvent event, const char* message, pgsocket sckt);
 
 /*
  * monitor event - событие
@@ -120,7 +129,9 @@ extern void NotifyMonitorEvent(void);
 
 typedef struct MonitorSubscriber
 {
+    // тк udp-соединение, надо еще несколько полей по соединению
     pgsocket	fd;	
+    struct sockaddr_un address;
 
     pid_t pid;
     /* Тут бы по хорошему иметь еще какую-то метаинформацию */
@@ -167,6 +178,19 @@ typedef struct EventToSubscriberSet {
 /* I'm not sure about extern, but curently it's okay*/
 extern EventToSubscriberSet *eventToSubscriberSet;
 
+typedef struct MonitorEventMessage {
+    MonitorEvent event;
+    TimestampTz event_time;
+    pid_t sender_pid;
+    char *data; // Теперь просто указатель, так как будем парсить JSON
+} MonitorEventMessage;
+
+MonitorEventMessage* ParseMonitorJson(const char* json) ;
+void FreeMonitorEventMessage(MonitorEventMessage* msg);
+
+bool is_valid_monitor_event(MonitorEvent event);
+
+
 /*
  * SubscriberToEvent
  * информация по подписчику не дублируется
@@ -188,15 +212,37 @@ extern EventToSubscriberSet *eventToSubscriberSet;
  * 
  */
 
+/*
+ * Можно будет посмотреть в буфферном кеше списки
+ */
 
 /*
  * На завтра 
  * ? разобраться MonitorEventSet или просто MonitorEvent для подписки
  * (может, можно сделать 2 интерфейса?)
  * ? доп поля во всяких подписчик - подписка - ... (еще это в целом можно сделать по ходу)
- * отписка(?) - такой интерфейс тоже мб нужен...
- * начать уведомление
  * 
+ * придумать формат уведомления
+ * сделать уведомление
+ * 
+ * интерфейс уведомления
+ * + интерфейс проверки событий
+ * 
+ * 
+ * Итак, я дошла до отправки) (вроде)
+ * 
+ * Доп поля для отправки
+ * 
+ * 1 нужно, чтобы у каждого процесса была штука типа "мой мониторинговый сокет"
+ * 2 каждый процесс при подписке сам настраивает себе сокет
+ * 
+ * наверное, в момент подписки нужно создавать структурку типа
+ * 
+ * надо вообще сейчас все делать на unix domain socket, там нет портов и тд
+ * они привязываются к файлу(но не всегда, только если самому указать его...)
+ * 
+ * тогда нужно сделать дополнение во время подписки: добавить 
+ * структуру под сокеты в структуру подписчика, и инициализировать ее во время подписки
  */
 
 

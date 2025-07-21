@@ -37,7 +37,7 @@ typedef enum MonitorEvent {
 } MonitorEvent;
 
 #define MONITOR_EVENT_NUM_TYPES ME_C + 1
-
+#define MONITOR_EVENT_START ME_A
 
 struct MonitorEventSet {
     pgsocket fd;
