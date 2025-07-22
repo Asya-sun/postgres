@@ -30,6 +30,18 @@
 #include "utils/jsonfuncs.h"
 
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/epoll.h>
+#include <fcntl.h>
+
+#define MAX_MESSAGES_AT_TIME 16
+#define SOCKET_PATH "/tmp/uds_epoll_example.sock"
+
 EventToSubscriberSet *eventToSubscriberSet;
 
 char* event_to_json(MonitorEvent event, const char* message, size_t *len);
@@ -57,13 +69,13 @@ void NotifyMonitorEvent(MonitorEvent event, const char* message, pgsocket sckt) 
     size_t len = 0;
     char* json_string = event_to_json(event, message, &len);
 
-    /* Making buffer ready [4 bytes length] [json] */
+    /* Making buffer ready [1 bytes length] [json] */
     
-    size_t total_size = sizeof(uint32_t) + len;
+    size_t total_size = sizeof(uint16_t) + len;
     char* buffer = palloc(total_size);
     
     // Записываем длину (сетевой порядок)
-    uint32_t net_len = htonl(len);
+    uint16_t net_len = htonl(len);
     memcpy(buffer, &net_len, sizeof(net_len));
     
     // Копируем JSON
@@ -97,6 +109,104 @@ void NotifyMonitorEvent(MonitorEvent event, const char* message, pgsocket sckt) 
 }
 
 
+
+
+
+
+////////////////////////////
+// Checking monitoring events on epoll
+
+/*
+ * Checking monitoring events
+ * Params:
+ * fd - fd to check monivents on
+ * millisec_timeout - timeout to wait events for; -1 = infinity
+ * надо еще как то отличать return NULL из-за ошибки и из -за отссутствия сообщений
+ * 
+ * if smth crusial happened, error_happened = true and watch logs
+ */
+MonitorEventMessage* CheckMonitorEvent(pgsocket fd, int millisec_timeout, bool *error_happened) {
+    MonitorEventMessage *messages = palloc0(sizeof(MonitorEventMessage) * MAX_MESSAGES_AT_TIME);
+    struct epoll_event ev, events[MAX_MESSAGES_AT_TIME];
+    char buf[1024];
+    int nfds, epollfd;
+    int nmsgs = 0;
+
+    *error_happened = false;
+
+    /* Code to set up listening socket, 'listen_sock',
+        (socket(), bind(), listen()) omitted. */
+
+    epollfd = epoll_create1(0);
+    if (epollfd == -1) {
+        elog(WARNING, "[ PID = %d ] epoll_create1", MyProcPid);
+        goto epoll_create1_error;
+    }
+
+    ev.events = EPOLLIN;
+    ev.data.fd = fd;
+    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &ev) == -1) {
+        elog(WARNING, "[ PID = %d ] epoll_ctl: fd", MyProcPid);
+        goto epoll_ctl_error;
+    }
+
+
+    nfds = epoll_wait(epollfd, events, MAX_MESSAGES_AT_TIME, millisec_timeout);
+    if (nfds == -1) {
+        elog(WARNING, "[ PID = %d ] epoll_wait", MyProcPid);
+        goto epoll_wait_error;
+    }    
+
+    for (int n = 0; n < nfds; ++n) {
+        if (events[n].data.fd == fd) {
+            int res = 0;
+            ssize_t recv_len;
+            memset(buf, 0, sizeof(buf));
+            recv_len = recvfrom(fd, buf, sizeof(buf), 0, NULL, NULL);
+            if (recv_len == -1) {
+                // /* Тут на самом деле большой вопрос, что конкретно делать */
+                // elog(WARNING, "[ PID = %d ] recvfrom: %m", MyProcPid);
+                // continue;
+                int saved_errno = errno;
+
+                /* Error that okay to ignore */
+                if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK || saved_errno == EINTR) {
+                    elog(WARNING,  "[ PID = %d ] recvfrom: %m", MyProcPid);  // Логируем для отладки
+                    continue;
+                }
+
+                /* Crucial errors */
+                elog(WARNING,  "[ PID = %d ] recvfrom failed: %m", MyProcPid);
+                
+                /* Crusial errors check */
+                if (saved_errno == ENOMEM || saved_errno == EFAULT || saved_errno == EBADF) {
+                    *error_happened = true;
+                    break;
+                }
+            }
+
+            buf[recv_len] = '\0';
+            elog(INFO, "Got message: %s", buf);
+            res = ParseMonitorJson(buf, &(messages[nmsgs]));
+            if (res != 0) {
+                elog(WARNING, "not suceed parsing");
+                continue;
+            }
+            nmsgs++;
+        }
+    }
+
+    close(epollfd);
+    return messages;
+
+epoll_ctl_error:
+epoll_wait_error:
+    close(epollfd);
+epoll_create1_error:
+    pfree(messages);
+    *error_happened = true;
+    return NULL;
+}
 
 /* State for parser */
 typedef struct {
@@ -139,21 +249,36 @@ static JsonParseErrorType parse_scalar(void *state, char *token, JsonTokenType t
 }
 
 
-MonitorEventMessage* ParseMonitorJson(const char* json) {
-    MonitorEventMessage* msg = palloc0(sizeof(MonitorEventMessage));
+int ParseMonitorJson(const char* json, MonitorEventMessage *msg) {
+    // MonitorEventMessage* msg = palloc0(sizeof(MonitorEventMessage));
     JsonLexContext lex;
-    text *result = cstring_to_text(json + sizeof(uint32_t));
+    text *result = cstring_to_text(json + sizeof(uint16_t));
     JsonParseErrorType error;
     ParseState state;
     JsonSemAction sem;
+    uint16_t net_len;
+    uint16_t len;  
+    size_t real_size;
     
     /* Cheking if json is valid */
     if (!json) {
         ereport(ERROR,
                 (errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
                 errmsg("json string cannot be NULL")));
-        return NULL;
+        return 1;
     }
+
+    net_len = ((uint16_t*)json)[0];
+    len = ntohl(net_len);  
+    real_size = strlen(json) - sizeof(uint16);
+    /* It's kinda cropped message */
+    if (len != real_size) {
+        ereport(ERROR,
+                (errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
+                errmsg("json size must be %d, but i\'s %d", len, (int) real_size)));
+        return 1;
+    }
+
     // Инициализация состояния
     state.msg = msg;
     state.current_key = NULL;
@@ -183,7 +308,7 @@ MonitorEventMessage* ParseMonitorJson(const char* json) {
     }
     pfree(result);
     
-    return msg;
+    return 1;
 }
 
 void FreeMonitorEventMessage(MonitorEventMessage* msg) {
@@ -449,19 +574,18 @@ void UnsubscribeFromAllMonitorEvents(pid_t pid, pgsocket fd) {
 }
 
 int UnsubscribeFromMonitorEvent(MonitorEvent event, pgsocket fd, pid_t pid) {
+    EventToSubscriberEntry *entry = NULL;
+
     /* There is no need to check if fd is valid or not*/
     if(!is_valid_monitor_event(event)) {
         elog(ERROR, "event type is not valid: %d", event);
         return 1;
     }
 
-
     /*
      * ищем подписку в списке ссылок на подписки
      * уменьшаем счетчик в подписке, приравниваем подписку к NULL
      */
-    EventToSubscriberEntry *entry = NULL;
-
     entry = &(eventToSubscriberSet->etsentries[event]);
     LWLockAcquire(&(entry->lock), LW_EXCLUSIVE);
     for (int i = 0; i < entry->max_nsubscriptions; i++) {

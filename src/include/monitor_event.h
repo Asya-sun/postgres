@@ -185,8 +185,9 @@ typedef struct MonitorEventMessage {
     char *data; // Теперь просто указатель, так как будем парсить JSON
 } MonitorEventMessage;
 
-MonitorEventMessage* ParseMonitorJson(const char* json) ;
+int ParseMonitorJson(const char* json, MonitorEventMessage *msg);
 void FreeMonitorEventMessage(MonitorEventMessage* msg);
+MonitorEventMessage* CheckMonitorEvent(pgsocket fd, int millisec_timeout, bool *error_happened);
 
 bool is_valid_monitor_event(MonitorEvent event);
 
@@ -243,6 +244,29 @@ bool is_valid_monitor_event(MonitorEvent event);
  * 
  * тогда нужно сделать дополнение во время подписки: добавить 
  * структуру под сокеты в структуру подписчика, и инициализировать ее во время подписки
+ * 
+ * Итак, подписка
+ * отписка
+ * notify
+ * 
+ * 
+ * теперь надо сделать проверку на событие - пришло ли событие???
+ * скорее всего, это будет сделано с помощью epol/select ... 
+ * 
+ * 
+ * общая логика примерно такая: 
+ * челик проверяет, пришло ли что то на сокет
+ * если да, то ...
+ * 
+ * Что возвращать в случае, если пришло сообщение?
+ * Ну в общем то, если пришло сообщение, то парсим json => получаем 
+ * номер события и пид, в котором это все произошло, и сообщение => 
+ * Ну, вот и буду это возвращать) массив из MonitorEventMessage (если их пришло несколько...)
+ * 
+ * что лучше - epoll / select / etc?
+ * корутины???
+ * В общем-то, в данный момент я пишу все скорее под линукс, поэтому можно не париться
+ * и делать как удобно
  */
 
 
