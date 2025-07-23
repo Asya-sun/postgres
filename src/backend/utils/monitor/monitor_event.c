@@ -362,60 +362,68 @@ MonitorShmemSize(void) {
 }
 
 
+
 void 
 MonitorEventSystemInit(void) {
     bool        found;
     Size        sz;
+    char        *ptr;
 
     sz = MonitorShmemSize();
     eventToSubscriberSet = (EventToSubscriberSet *)
         ShmemInitStruct("Shared Memory Monitor Event Subsystem", sz, &found);
 
-    /* Actually, it would be better with checks like " if (isUnderPostmaster) ", etc. */
-    if (!found) {
-        char *p = (char *)(eventToSubscriberSet + 
-            add_size(MAXALIGN(sizeof(EventToSubscriberSet)), monitor_entry_init_size()));
-        sz = 0;
-
-        eventToSubscriberSet->subscriptions = NULL;
-        eventToSubscriberSet->etsentries = (EventToSubscriberEntry*)
-            ((char*)eventToSubscriberSet + MAXALIGN(sizeof(EventToSubscriberSet)));
+    if (!IsUnderPostmaster)
+    {
+        Assert(!found);
+        
+        /* Initialize main structure */
+        memset(eventToSubscriberSet, 0, sz);
         eventToSubscriberSet->max_nsubscription = MAX_SUBSCRIBERS;
-
-
-        /* Initialization of entries */          
+        
+        /* Set up pointers to different memory areas */
+        ptr = (char *) eventToSubscriberSet;
+        ptr += MAXALIGN(sizeof(EventToSubscriberSet));
+        
+        /* Initialize etsentries array */
+        eventToSubscriberSet->etsentries = (EventToSubscriberEntry *) ptr;
+        ptr += monitor_entry_init_size();
+        
+        /* Initialize subscription refs for each entry */
         for (int i = 0; i < MONITOR_EVENT_NUM_TYPES; i++) {
-            EventToSubscriberEntry entry = eventToSubscriberSet->etsentries[i];
-            eventToSubscriberSet->etsentries[i].event = i;
-            eventToSubscriberSet->etsentries[i].nsubscribtion = 0;
-            eventToSubscriberSet->etsentries[i].max_nsubscriptions = MAX_SUBSCRIBERS_PER_EVENT;
-            eventToSubscriberSet->etsentries[i].subscribtion_refs = (MonitorSubscription_Ref *) p;
-
-            /* set all refs to subscriptions to NULL*/
-            for (size_t i = 0; i < MAX_SUBSCRIBERS_PER_EVENT; i++) {
-                entry.subscribtion_refs[i] = NULL;
-            }            
-
-            p = p + MAX_SUBSCRIBERS_PER_EVENT * sizeof(MonitorSubscription_Ref);
+            EventToSubscriberEntry *entry = &eventToSubscriberSet->etsentries[i];
+            entry->event = i;
+            entry->nsubscribtion = 0;
+            entry->max_nsubscriptions = MAX_SUBSCRIBERS_PER_EVENT;
+            entry->subscribtion_refs = (MonitorSubscription_Ref *) ptr;
+            ptr += MAX_SUBSCRIBERS_PER_EVENT * sizeof(MonitorSubscription_Ref);
+            
+            /* Initialize all refs to NULL */
+            for (int j = 0; j < MAX_SUBSCRIBERS_PER_EVENT; j++) {
+                entry->subscribtion_refs[j] = NULL;
+            }
+            
+            /* Initialize lock for this entry */
+            LWLockInitialize(&entry->lock, LWTRANCHE_MONITOR_EVENT);
         }
-
-        p = (char *)(eventToSubscriberSet + 
-            add_size(MAXALIGN(sizeof(EventToSubscriberSet)), monitor_entry_init_size()));
-        sz = MAXALIGN(sizeof(EventToSubscriberSet));
-        /* memory for etsentries */
-        sz = add_size(sz, monitor_entry_init_size());
-        /* memory for subscribtion_refs for all event types */
-        sz = add_size(sz, monitor_entries_subref_size());
-        p = (char *)(eventToSubscriberSet + sz);
-
-        eventToSubscriberSet->subscriptions = (MonitorSubscription *)p;
-        /* maybe here need to initialize subscriptions... */
-
+        
+        /* Initialize subscriptions array */
+        eventToSubscriberSet->subscriptions = (MonitorSubscription *) ptr;
+        ptr += monitor_subscriptions_size();
+        
+        /* Initialize all subscriptions */
         for (int i = 0; i < MAX_SUBSCRIBERS; i++) {
-            eventToSubscriberSet->subscriptions[i].ref_count = 0;
-            eventToSubscriberSet->subscriptions[i].subscriber.fd = -1;
-            eventToSubscriberSet->subscriptions[i].subscriber.pid = 0;
+            MonitorSubscription *sub = &eventToSubscriberSet->subscriptions[i];
+            sub->ref_count = 0;
+            sub->subscriber.fd = PGINVALID_SOCKET;
+            sub->subscriber.pid = 0;
+            memset(&sub->subscriber.address, 0, sizeof(struct sockaddr_un));
+            LWLockInitialize(&sub->lock, LWTRANCHE_MONITOR_EVENT);
         }
+    }
+    else
+    {
+        Assert(found);
     }
 }
 
