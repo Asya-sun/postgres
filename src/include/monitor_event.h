@@ -188,7 +188,8 @@ typedef struct MonitorEventMessage {
 
 int ParseMonitorJson(const char* json, MonitorEventMessage *msg);
 void FreeMonitorEventMessage(MonitorEventMessage* msg);
-MonitorEventMessage* CheckMonitorEvent(pgsocket fd, int millisec_timeout, bool *error_happened);
+MonitorEventMessage* CheckMonitorEvent(pgsocket fd, int millisec_timeout, bool *error_happened, int *mnum);
+void FreeMEMessagesAfterEvent(MonitorEventMessage *msg, int nmsg);
 
 bool is_valid_monitor_event(MonitorEvent event);
 
