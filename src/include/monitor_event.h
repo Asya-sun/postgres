@@ -26,8 +26,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#define MAX_SUBSCRIBERS 64
-#define MAX_SUBSCRIBERS_PER_EVENT 64
+/* It's discussable*/
+#define MAX_SUBSCRIBERS 5
+#define MAX_SUBSCRIBERS_PER_EVENT MAX_SUBSCRIBERS
 
 /*
  * This structure is needed to simplify procedure of subscription to many
@@ -41,10 +42,10 @@ extern Size MonitorShmemSize(void);
 extern void MonitorEventSystemInit(void);
 
 /* all this is under question */
-extern MonitorEventSet *CreateMonitorEventSet(int event_num);
-extern void FreeMonitorEventSet(MonitorEventSet *set);
-extern int	AddMonitorEventToSet(MonitorEventSet *set, uint32 events, pgsocket fd);
-extern int SubscribeToMonitorEventSet(MonitorEventSet *set, pgsocket fd);
+// extern MonitorEventSet *CreateMonitorEventSet(int event_num);
+// extern void FreeMonitorEventSet(MonitorEventSet *set);
+// extern int	AddMonitorEventToSet(MonitorEventSet *set, uint32 events, pgsocket fd);
+// extern int SubscribeToMonitorEventSet(MonitorEventSet *set, pgsocket fd);
 
 extern int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd, struct sockaddr_un address);
 /* 

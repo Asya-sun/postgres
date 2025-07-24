@@ -334,10 +334,17 @@ monitor_entry_init_size(void) {
 
 Size
 monitor_entries_subref_size(void) {
-    Size sz;
+    Size sz = 0;
 
-    sz = MONITOR_EVENT_NUM_TYPES * MAX_SUBSCRIBERS_PER_EVENT * sizeof(MonitorSubscription_Ref);
-	return MAXALIGN(sz);
+    sz = sizeof(MonitorSubscription_Ref);
+	sz *= (Size) MONITOR_EVENT_NUM_TYPES;
+    sz *= (Size) MAX_SUBSCRIBERS_PER_EVENT;
+    
+    // elog(LOG, "Subrefs size calculation: %d*%d*%lu=%lu",
+    //      MONITOR_EVENT_NUM_TYPES, MAX_SUBSCRIBERS_PER_EVENT,
+    //      sizeof(MonitorSubscription_Ref), sz);
+    
+    return MAXALIGN(sz);
 }
 
 Size
@@ -345,6 +352,9 @@ monitor_subscriptions_size(void) {
     Size sz;
 
     sz = MAX_SUBSCRIBERS * sizeof(MonitorSubscription);
+    // elog(LOG, "subscriptions size calculation: %d*%lu=%lu",
+    //      MAX_SUBSCRIBERS, 
+    //      sizeof(MonitorSubscription), sz);
 	
     return MAXALIGN(sz);
 }
@@ -358,60 +368,51 @@ MonitorShmemSize(void) {
     sz = add_size(sz, monitor_entries_subref_size());       /* memory for subscribtion_refs for all event types */
     sz = add_size(sz, monitor_subscriptions_size());        /* memory for subscribtions at the main structure */
 
+    // elog(LOG, "%ld %ld %ld %ld", MAXALIGN(sizeof(EventToSubscriberSet)), 
+    //                 monitor_entry_init_size(), monitor_entries_subref_size(), 
+    //                 monitor_subscriptions_size());
     return sz;
 }
 
-
-
-void 
-MonitorEventSystemInit(void) {
-    bool        found;
-    Size        sz;
-    char        *ptr;
+void MonitorEventSystemInit(void) {
+    bool found;
+    Size sz;
+    uintptr_t *ptr;
 
     sz = MonitorShmemSize();
     eventToSubscriberSet = (EventToSubscriberSet *)
         ShmemInitStruct("Shared Memory Monitor Event Subsystem", sz, &found);
-
-    if (!IsUnderPostmaster)
-    {
+    
+    if (!IsUnderPostmaster) {
         Assert(!found);
-        
-        /* Initialize main structure */
         memset(eventToSubscriberSet, 0, sz);
-        eventToSubscriberSet->max_nsubscription = MAX_SUBSCRIBERS;
         
-        /* Set up pointers to different memory areas */
-        ptr = (char *) eventToSubscriberSet;
+        ptr = (uintptr_t *)eventToSubscriberSet;
         ptr += MAXALIGN(sizeof(EventToSubscriberSet));
         
-        /* Initialize etsentries array */
-        eventToSubscriberSet->etsentries = (EventToSubscriberEntry *) ptr;
-        ptr += monitor_entry_init_size();
+        eventToSubscriberSet->max_nsubscription = MAX_SUBSCRIBERS;
+        eventToSubscriberSet->etsentries = (EventToSubscriberEntry *)ptr;
+        ptr += monitor_entry_init_size() ;
         
-        /* Initialize subscription refs for each entry */
+
         for (int i = 0; i < MONITOR_EVENT_NUM_TYPES; i++) {
             EventToSubscriberEntry *entry = &eventToSubscriberSet->etsentries[i];
             entry->event = i;
             entry->nsubscribtion = 0;
             entry->max_nsubscriptions = MAX_SUBSCRIBERS_PER_EVENT;
-            entry->subscribtion_refs = (MonitorSubscription_Ref *) ptr;
-            ptr += MAX_SUBSCRIBERS_PER_EVENT * sizeof(MonitorSubscription_Ref);
+            entry->subscribtion_refs = (MonitorSubscription_Ref *)ptr;
+        
+            ptr += MAXALIGN(MAX_SUBSCRIBERS_PER_EVENT * sizeof(MonitorSubscription_Ref));
             
-            /* Initialize all refs to NULL */
             for (int j = 0; j < MAX_SUBSCRIBERS_PER_EVENT; j++) {
                 entry->subscribtion_refs[j] = NULL;
             }
             
-            /* Initialize lock for this entry */
             LWLockInitialize(&entry->lock, LWTRANCHE_MONITOR_EVENT);
         }
         
-        /* Initialize subscriptions array */
-        eventToSubscriberSet->subscriptions = (MonitorSubscription *) ptr;
-        ptr += monitor_subscriptions_size();
-        
-        /* Initialize all subscriptions */
+        eventToSubscriberSet->subscriptions = (MonitorSubscription *)ptr;
+    
         for (int i = 0; i < MAX_SUBSCRIBERS; i++) {
             MonitorSubscription *sub = &eventToSubscriberSet->subscriptions[i];
             sub->ref_count = 0;
@@ -420,12 +421,17 @@ MonitorEventSystemInit(void) {
             memset(&sub->subscriber.address, 0, sizeof(struct sockaddr_un));
             LWLockInitialize(&sub->lock, LWTRANCHE_MONITOR_EVENT);
         }
-    }
-    else
-    {
+        
+        /* Финальная проверка */
+        if ((ptr + monitor_subscriptions_size() - (uintptr_t *)eventToSubscriberSet) > sz) {
+            elog(ERROR, "Memory overflow detected");
+        }
+    } else {
         Assert(found);
     }
+
 }
+
 
 bool is_valid_monitor_event(MonitorEvent event) {
     return event >= MONITOR_EVENT_START && event < MONITOR_EVENT_NUM_TYPES;
@@ -441,6 +447,8 @@ bool is_valid_monitor_event(MonitorEvent event) {
 
 /*
  * нужно будет еще разобраться с счетчиками nsubscription
+ * 
+ * Pgsocket should be non-blocking uds socket
  */
 int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd, struct sockaddr_un address) {
     // по хорошему бы проверка, норм сокет или нет
@@ -459,8 +467,6 @@ int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd, struct sockaddr_un 
         elog(ERROR, "event type is not valid: %d", event);
         return 1;
     }
-
-    
 
     /* addind to subscriptions array*/
     /* check, if the subscriber in array already */
@@ -489,9 +495,13 @@ int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd, struct sockaddr_un 
      * if needed subscriber isn't in array already,
      * then we find free place and take it!
      */    
+    //до сюда все гуд
+    // ДО СЮДА ВСЕ ГУД
+    //////////////////////////////////////////////
     if (subscriprion_ref == NULL) {
         prev_ref = NULL;
         if (eventToSubscriberSet->nsubscription == eventToSubscriberSet->max_nsubscription) {
+            elog(LOG, "ALL SUBSRCIBTIONS ARE BUSY %d", __LINE__);
             /* every subscriptin slot is busy */
             return 1;
         }
@@ -514,7 +524,7 @@ int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd, struct sockaddr_un 
             if (ref->ref_count == 0) {
                 ref->subscriber.fd = fd;
                 ref->subscriber.pid = MyProcPid;
-                ref->subscriber.address = address;
+                memcpy(&(ref->subscriber.address), &address, sizeof(address));
 
                 subscriprion_ref = ref;
                 LWLockRelease(&(ref->lock));
@@ -529,7 +539,7 @@ int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd, struct sockaddr_un 
         }
 
     }
-
+    //////////////////////////////////////////////
 
     /*
      * if the subscriber is already subscribed to the event, no need to change ref_count
@@ -539,33 +549,35 @@ int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd, struct sockaddr_un 
     entry = &(eventToSubscriberSet->etsentries[event]);
     LWLockAcquire(&(entry->lock), LW_EXCLUSIVE);
     entry->nsubscribtion++;
+
+    
+
     for (int i = 0; i < entry->max_nsubscriptions; i++) {
-        MonitorSubscription_Ref ref = entry->subscribtion_refs[i];
-        if (ref != NULL) {
+        MonitorSubscription_Ref *ref_ptr = &(entry->subscribtion_refs[i]);
+        if (*ref_ptr != NULL) {
             /* 
              * if this ref is already ref to needed subscription,
              * it means the subscriber is already in subscription ref array
              */
-            if (ref == subscriprion_ref) {
+            if (*ref_ptr == subscriprion_ref) {
                 LWLockRelease(&(entry->lock));
                 return 0;
             }
-
             /*
              * if ref is ref to free subscription, 
              */
-            if (ref->ref_count == 0) {
-                ref = subscriprion_ref;
-                ref->ref_count +=1;   
+            if ((*ref_ptr)->ref_count == 0) {
+                *ref_ptr = subscriprion_ref;
+                (*ref_ptr)->ref_count +=1;   
                 LWLockRelease(&(entry->lock));
                 return 0;
             }
-        }
-
+        } 
         /* if ref = NULL, it means place is free */
-        if (ref == NULL) {
-            ref = subscriprion_ref;
-            ref->ref_count +=1; 
+        else 
+        {
+            *ref_ptr = subscriprion_ref;
+            (*ref_ptr)->ref_count +=1; 
             LWLockRelease(&(entry->lock));
             return 0;
         }
