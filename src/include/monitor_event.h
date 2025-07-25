@@ -27,7 +27,7 @@
 #include <arpa/inet.h>
 
 /* It's discussable*/
-#define MAX_SUBSCRIBERS 5
+#define MAX_SUBSCRIBERS 6
 #define MAX_SUBSCRIBERS_PER_EVENT MAX_SUBSCRIBERS
 
 /*

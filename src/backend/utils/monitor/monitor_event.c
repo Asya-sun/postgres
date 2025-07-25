@@ -121,6 +121,7 @@ void NotifyMonitorEvent(MonitorEvent event, const char* message, pgsocket sckt) 
             elog(LOG, "Sending to socket: path='%s', addr_len=%d total_size=%ld", addr->sun_path, addr_len, total_size);
             if (access(addr->sun_path, F_OK) == -1) {
                 elog(LOG, "Socket file %s does not exist!", addr->sun_path);
+                LWLockRelease(&(sub->lock));
                 continue;
             }
 
@@ -507,7 +508,6 @@ int SubscribeToMonitorEvent(MonitorEvent event, pgsocket fd, struct sockaddr_un 
         }
 
     }
-    //////////////////////////////////////////////
 
     /*
      * if the subscriber is already subscribed to the event, no need to change ref_count
@@ -582,14 +582,28 @@ int UnsubscribeFromMonitorEvent(MonitorEvent event, pgsocket fd, pid_t pid) {
     LWLockAcquire(&(entry->lock), LW_EXCLUSIVE);
     for (int i = 0; i < entry->max_nsubscriptions; i++) {
         MonitorSubscription_Ref *ref_ptr = &(entry->subscribtion_refs[i]);
-        if (*ref_ptr != NULL &&  (*ref_ptr)->subscriber.pid == pid && (fd == PGINVALID_SOCKET || (*ref_ptr)->subscriber.fd == fd)) {
-            (*ref_ptr)->ref_count -= 1;
-            *ref_ptr = NULL;
-            LWLockRelease(&(entry->lock));
-            return 0;
+        if (*ref_ptr != NULL) {
+            MonitorSubscription_Ref sub_to_clear;
+            LWLockAcquire(&((*ref_ptr)->lock), LW_EXCLUSIVE);
+            if ((*ref_ptr)->subscriber.pid == pid && (fd == PGINVALID_SOCKET || (*ref_ptr)->subscriber.fd == fd)) {
+                (*ref_ptr)->ref_count -= 1;
+
+                // Сохраняем указатель перед обнулением
+                sub_to_clear = *ref_ptr;
+                *ref_ptr = NULL;  // Теперь ref_ptr не используется
+                
+                LWLockRelease(&(sub_to_clear->lock));  // Освобождаем через сохранённый указатель
+
+                LWLockRelease(&(entry->lock));
+                return 0;
+            }
+            LWLockRelease(&((*ref_ptr)->lock));
         }
+        
     } 
 
+    LWLockRelease(&(entry->lock));	
+    elog(LOG, "[%d] NO SUBSCRIBTION WITH PARAMETERS:\n EVENT_TYPE %d\n socket: %d\npid: %d", MyProcPid, ME_C, fd, MyProcPid);
     return 1;
 }
 
@@ -681,19 +695,18 @@ int ParseMonitorJson(const char* json, MonitorEventMessage *msg) {
     size_t real_size;
     char *json_str;
 
-    // 1. Проверка входных данных
+    // Проверка входных данных
     if (!json || !msg) {
         elog(WARNING, "NULL pointer passed to ParseMonitorJson");
         return 1;
     }
 
-    // 2. Извлечение длины сообщения
-
+    // Извлечение длины сообщения
     net_len = *((uint16_t*)json);
     len = ntohs(net_len);
     json_str = (char*)(json + sizeof(uint16_t));
 
-    // 3. Проверка длины
+    // Проверка длины
     real_size = strlen(json_str);
     if (len != real_size) {
         elog(WARNING, "Length mismatch: header=%d, actual=%zu", len, real_size);
@@ -702,11 +715,11 @@ int ParseMonitorJson(const char* json, MonitorEventMessage *msg) {
 
     // elog(LOG, "Parsing JSON: %.*s", (int)len, json_str);
 
-    // 4. Инициализация состояния
+    // Инициализация состояния
     memset(&state, 0, sizeof(ParseState));
     state.msg = msg;
 
-    // 5. Настройка парсера
+    // Настройка парсера
     memset(&sem, 0, sizeof(JsonSemAction));
     sem.semstate = (void *)&state;
     sem.object_start = parse_object_start;
@@ -716,11 +729,10 @@ int ParseMonitorJson(const char* json, MonitorEventMessage *msg) {
     sem.object_end = parse_object_end;
     sem.array_end = parse_array_end;
 
-    // 6. Создание контекста парсера
-
+    // Создание контекста парсера
     lex = makeJsonLexContextCstringLen(NULL, json_str, len, PG_UTF8, true);
 
-    // 7. Парсинг
+    // Парсинг
     error = pg_parse_json(lex, &sem);
     if (error != JSON_SUCCESS) {
         char *errmsg = json_errdetail(error, lex);
@@ -730,7 +742,7 @@ int ParseMonitorJson(const char* json, MonitorEventMessage *msg) {
         return 1;
     }
 
-    // 8. Проверка результата
+    // Проверка результата
     if (!state.msg->data) {
         elog(WARNING, "No data field found in JSON");
     }
