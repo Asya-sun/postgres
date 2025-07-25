@@ -196,9 +196,6 @@ MonitorEventMessage* CheckMonitorEvent(pgsocket fd, int millisec_timeout, bool *
 
     *error_happened = false;
 
-    /* Code to set up listening socket, 'listen_sock',
-        (socket(), bind(), listen()) omitted. */
-
     epollfd = epoll_create1(0);
     if (epollfd == -1) {
         elog(WARNING, "[ PID = %d ] epoll_create1", MyProcPid);
@@ -212,7 +209,6 @@ MonitorEventMessage* CheckMonitorEvent(pgsocket fd, int millisec_timeout, bool *
         goto epoll_ctl_error;
     }
 
-
     nfds = epoll_wait(epollfd, events, MAX_MESSAGES_AT_TIME, millisec_timeout);
     if (nfds == -1) {
         elog(WARNING, "[ PID = %d ] epoll_wait", MyProcPid);
@@ -221,43 +217,52 @@ MonitorEventMessage* CheckMonitorEvent(pgsocket fd, int millisec_timeout, bool *
 
     for (int n = 0; n < nfds; ++n) {
         if (events[n].data.fd == fd) {
-            int res = 0;
-            ssize_t recv_len;
-            memset(buf, 0, sizeof(buf));
-            recv_len = recvfrom(fd, buf, sizeof(buf), 0, NULL, NULL);
-            if (recv_len == -1) {
-                // /* Тут на самом деле большой вопрос, что конкретно делать */
-                // elog(WARNING, "[ PID = %d ] recvfrom: %m", MyProcPid);
-                // continue;
-                int saved_errno = errno;
-                perror("sendto");
+            // Читаем сообщения в цикле, пока они есть
+            while (nmsgs < MAX_MESSAGES_AT_TIME) {
+                int res = 0;
+                ssize_t recv_len;
+                memset(buf, 0, sizeof(buf));
+                
+                
+                recv_len = recvfrom(fd, buf, sizeof(buf), MSG_DONTWAIT, NULL, NULL);
+                
+                if (recv_len == -1) {
+                    // /* Тут на самом деле большой вопрос, что конкретно делать */
+                    // elog(WARNING, "[ PID = %d ] recvfrom: %m", MyProcPid);
+                    // continue;
+                    int saved_errno = errno;
+                    perror("sendto");
 
-                /* Error that okay to ignore */
-                if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK || saved_errno == EINTR) {
-                    elog(WARNING,  "[ PID = %d ] recvfrom: %m", MyProcPid);  // Логируем для отладки
+                    /* Error that okay to ignore */
+                    if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK ) {
+                        /* no more data */
+                        // elog(WARNING,  "[ PID = %d ] recvfrom: %m", MyProcPid);  // Логируем для отладки
+                        break;
+                    }
+
+                     /* Crucial errors */
+                    elog(WARNING,  "[ PID = %d ] recvfrom failed: %m", MyProcPid);
+                                    
+                    if (saved_errno == ENOMEM || saved_errno == EFAULT || saved_errno == EBADF) {
+                        elog(WARNING,  "[ PID = %d ] CRUCIAL recvfrom failed: %m", MyProcPid);
+                        *error_happened = true;
+                        break;
+                    }
                     continue;
                 }
 
-                /* Crucial errors */
-                elog(WARNING,  "[ PID = %d ] recvfrom failed: %m", MyProcPid);
-                
-                /* Crusial errors check */
-                if (saved_errno == ENOMEM || saved_errno == EFAULT || saved_errno == EBADF) {
-
-                    elog(WARNING,  "[ PID = %d ] CRUCIAL recvfrom failed: %m", MyProcPid);
-                    *error_happened = true;
-                    break;
+                if (recv_len > 0) {
+                    buf[recv_len] = '\0';
+                    elog(INFO, "Got message: %s", buf);
+                    res = ParseMonitorJson(buf, &(messages[nmsgs]));
+                    if (res != 0) {
+                        elog(WARNING, "not suceed parsing");
+                        continue;
+                    }
+                    
+                    nmsgs++;
                 }
             }
-
-            buf[recv_len] = '\0';
-            elog(INFO, "Got message: %s", buf);
-            res = ParseMonitorJson(buf, &(messages[nmsgs]));
-            if (res != 0) {
-                elog(WARNING, "not suceed parsing");
-                continue;
-            }
-            nmsgs++;
         }
     }
 
@@ -273,6 +278,8 @@ epoll_create1_error:
     *error_happened = true;
     return NULL;
 }
+
+
 
 void FreeMEMessagesAfterEvent(MonitorEventMessage *msg, int nmsg) {
     for (int i = 0; i < MAX_MESSAGES_AT_TIME; i++) {
