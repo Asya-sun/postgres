@@ -1,0 +1,5 @@
+# test_mes extension
+comment = 'learn new stuff about pg extensions'
+default_version = '1.0'
+module_pathname = '$libdir/test_mes'
+relocatable = true

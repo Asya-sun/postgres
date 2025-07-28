@@ -67,7 +67,6 @@ char* event_to_json(MonitorEvent event, const char* message, size_t *len) {
     appendStringInfo(&json, "\"event\":%d,", event);
     appendStringInfo(&json, "\"time\":%lld,", (long long)GetCurrentTimestamp());
     appendStringInfo(&json, "\"pid\":%d,", MyProcPid);
-    // escape_json(&json, message);  // Экранирование спецсимволов в строке
     appendStringInfo(&json, "\"data\":\"%s\"", message);
     appendStringInfo(&json, "}");
     
@@ -165,18 +164,12 @@ void NotifyMonitorEvent(MonitorEvent event, const char* message, pgsocket sckt) 
     }
     LWLockRelease(&(entry->lock));
     
-    /* Clearing */
     pfree(buffer);
     pfree(json_string);
 }
 
 
 
-
-
-
-////////////////////////////
-// Checking monitoring events on epoll
 
 /*
  * Checking monitoring events
@@ -595,11 +588,10 @@ int UnsubscribeFromMonitorEvent(MonitorEvent event, pgsocket fd, pid_t pid) {
             if ((*ref_ptr)->subscriber.pid == pid && (fd == PGINVALID_SOCKET || (*ref_ptr)->subscriber.fd == fd)) {
                 (*ref_ptr)->ref_count -= 1;
 
-                // Сохраняем указатель перед обнулением
                 sub_to_clear = *ref_ptr;
-                *ref_ptr = NULL;  // Теперь ref_ptr не используется
+                *ref_ptr = NULL;
                 
-                LWLockRelease(&(sub_to_clear->lock));  // Освобождаем через сохранённый указатель
+                LWLockRelease(&(sub_to_clear->lock));
 
                 LWLockRelease(&(entry->lock));
                 return 0;
@@ -610,7 +602,7 @@ int UnsubscribeFromMonitorEvent(MonitorEvent event, pgsocket fd, pid_t pid) {
     } 
 
     LWLockRelease(&(entry->lock));	
-    elog(LOG, "[%d] NO SUBSCRIBTION WITH PARAMETERS:\n EVENT_TYPE %d\n socket: %d\npid: %d", MyProcPid, ME_C, fd, MyProcPid);
+    elog(LOG, "[%d] NO SUBSCRIBTION WITH PARAMETERS:\n EVENT_TYPE %d\n socket: %d\npid: %d", MyProcPid, event, fd, MyProcPid);
     return 1;
 }
 
@@ -666,7 +658,6 @@ static JsonParseErrorType parse_scalar(void *state, char *token, JsonTokenType t
         return JSON_EXPECTED_MORE;
     }
 
-    // elog(LOG, "Parsing scalar: %s = %s", pstate->current_key, token);
     
     if (strcmp(pstate->current_key, "event") == 0) {
         pstate->msg->event = atoi(token);
@@ -702,31 +693,24 @@ int ParseMonitorJson(const char* json, MonitorEventMessage *msg) {
     size_t real_size;
     char *json_str;
 
-    // Проверка входных данных
     if (!json || !msg) {
         elog(WARNING, "NULL pointer passed to ParseMonitorJson");
         return 1;
     }
 
-    // Извлечение длины сообщения
     net_len = *((uint16_t*)json);
     len = ntohs(net_len);
     json_str = (char*)(json + sizeof(uint16_t));
 
-    // Проверка длины
     real_size = strlen(json_str);
     if (len != real_size) {
         elog(WARNING, "Length mismatch: header=%d, actual=%zu", len, real_size);
         return 1;
     }
 
-    // elog(LOG, "Parsing JSON: %.*s", (int)len, json_str);
-
-    // Инициализация состояния
     memset(&state, 0, sizeof(ParseState));
     state.msg = msg;
 
-    // Настройка парсера
     memset(&sem, 0, sizeof(JsonSemAction));
     sem.semstate = (void *)&state;
     sem.object_start = parse_object_start;
@@ -736,10 +720,8 @@ int ParseMonitorJson(const char* json, MonitorEventMessage *msg) {
     sem.object_end = parse_object_end;
     sem.array_end = parse_array_end;
 
-    // Создание контекста парсера
     lex = makeJsonLexContextCstringLen(NULL, json_str, len, PG_UTF8, true);
 
-    // Парсинг
     error = pg_parse_json(lex, &sem);
     if (error != JSON_SUCCESS) {
         char *errmsg = json_errdetail(error, lex);
@@ -749,7 +731,7 @@ int ParseMonitorJson(const char* json, MonitorEventMessage *msg) {
         return 1;
     }
 
-    // Проверка результата
+    /* Checking result*/
     if (!state.msg->data) {
         elog(WARNING, "No data field found in JSON");
     }
