@@ -51,6 +51,7 @@
 #include "postmaster/syslogger.h"
 #include "postmaster/walsummarizer.h"
 #include "postmaster/walwriter.h"
+#include "postmaster/monitoring.h"
 #include "replication/slotsync.h"
 #include "replication/walreceiver.h"
 #include "storage/dsm.h"
@@ -206,6 +207,7 @@ child_process_kind child_process_kinds[] = {
 	[B_WAL_RECEIVER] = {"wal_receiver", WalReceiverMain, true},
 	[B_WAL_SUMMARIZER] = {"wal_summarizer", WalSummarizerMain, true},
 	[B_WAL_WRITER] = {"wal_writer", WalWriterMain, true},
+	[B_MONITORING] = {"monitoring_giver", MonitoringProcessMain, true},
 
 	[B_LOGGER] = {"syslogger", SysLoggerMain, false},
 };

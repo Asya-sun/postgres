@@ -26,6 +26,7 @@ OBJS = \
 	startup.o \
 	syslogger.o \
 	walsummarizer.o \
-	walwriter.o
+	walwriter.o \
+	monitoring.o
 
 include $(top_srcdir)/src/backend/common.mk
