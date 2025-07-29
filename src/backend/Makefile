@@ -49,6 +49,8 @@ LIBS := $(filter-out -lpgport -lpgcommon, $(LIBS)) $(LDAP_LIBS_BE) $(ICU_LIBS)
 
 # The backend doesn't need everything that's in LIBS, however
 LIBS := $(filter-out -lreadline -ledit -ltermcap -lncurses -lcurses, $(LIBS))
+# for mionitoring.o
+LIBS += -lcurl
 
 ifeq ($(with_systemd),yes)
 LIBS += -lsystemd

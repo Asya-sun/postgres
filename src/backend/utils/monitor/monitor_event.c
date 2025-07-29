@@ -57,8 +57,10 @@
 
 EventToSubscriberSet *eventToSubscriberSet;
 
-char* event_to_json(MonitorEvent event, const char* message, size_t *len);
-
+/*
+ * return palloc'ed char*
+ * needed to be freed after use
+ */
 char* event_to_json(MonitorEvent event, const char* message, size_t *len) {
     StringInfoData json;
     initStringInfo(&json);
@@ -738,4 +740,75 @@ int ParseMonitorJson(const char* json, MonitorEventMessage *msg) {
 
     freeJsonLexContext(lex);
     return 0;
+}
+
+
+
+
+void create_nonblocking_uds_socket(const char *socket_path, struct sockaddr_un *addr, pgsocket *sock)
+{
+    int sockfd;
+    int ret;
+	int flags;
+
+    // Создаем UDS сокет
+    sockfd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (sockfd == -1) {
+        ereport(ERROR,
+                (errcode_for_socket_access(),
+                 errmsg("не удалось создать UDS сокет: %m")));
+    }
+
+    // Устанавливаем неблокирующий режим
+    flags = fcntl(sockfd, F_GETFL, 0);
+    if (flags == -1) {
+        close(sockfd);
+        ereport(ERROR,
+                (errcode_for_socket_access(),
+                 errmsg("не удалось получить флаги сокета: %m")));
+    }
+    
+    if (fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) == -1) {
+        close(sockfd);
+        ereport(ERROR,
+                (errcode_for_socket_access(),
+                 errmsg("не удалось установить неблокирующий режим: %m")));
+    }
+
+    // Настраиваем адрес сокета
+    memset(addr, 0, sizeof(*addr));
+    (*addr).sun_family = AF_UNIX;
+    strncpy((*addr).sun_path, socket_path, sizeof((*addr).sun_path) - 1);
+
+    // Удаляем старый сокет, если он существует
+    unlink(socket_path);
+
+    // Привязываем сокет к адресу
+    ret = bind(sockfd, (struct sockaddr *)addr, sizeof(*addr));
+    if (ret == -1) {
+        close(sockfd);
+        ereport(ERROR,
+                (errcode_for_socket_access(),
+                 errmsg("не удалось привязать UDS сокет: %m")));
+    }
+	*sock = sockfd;
+
+	return;
+}
+
+char *MonitorEventMessageToJSON(MonitorEventMessage *msg, size_t *len) {
+    StringInfoData json;
+    initStringInfo(&json);
+    
+    appendStringInfo(&json, "{");
+    appendStringInfo(&json, "\"event\":%d,", msg->event);
+    appendStringInfo(&json, "\"time\":%lld,", msg->event_time);
+    appendStringInfo(&json, "\"pid\":%d,", msg->sender_pid);
+    appendStringInfo(&json, "\"data\":\"%s\"", msg->data);
+    appendStringInfo(&json, "}");
+    
+    if (len != NULL) {
+        *len = json.len;
+    }
+    return json.data;
 }

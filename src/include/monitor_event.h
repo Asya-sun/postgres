@@ -69,7 +69,7 @@ extern int UnsubscribeFromMonitorEvent(MonitorEvent event, pgsocket fd, pid_t pi
  * the exact fd, or PGINVALID_SOCKET if you'd like to unsubscribe from all events
  */
 extern void UnsubscribeFromAllMonitorEvents(pid_t pid, pgsocket fd);
-void NotifyMonitorEvent(MonitorEvent event, const char* message, pgsocket sckt);
+extern void NotifyMonitorEvent(MonitorEvent event, const char* message, pgsocket sckt);
 
 /*
  * monitor event - событие
@@ -181,12 +181,17 @@ typedef struct MonitorEventMessage {
     char *data; // Теперь просто указатель, так как будем парсить JSON
 } MonitorEventMessage;
 
-int ParseMonitorJson(const char* json, MonitorEventMessage *msg);
-void FreeMonitorEventMessage(MonitorEventMessage* msg);
-MonitorEventMessage* CheckMonitorEvent(pgsocket fd, int millisec_timeout, bool *error_happened, int *mnum);
-void FreeMEMessagesAfterEvent(MonitorEventMessage *msg, int nmsg);
+extern int ParseMonitorJson(const char* json, MonitorEventMessage *msg);
+extern void FreeMonitorEventMessage(MonitorEventMessage* msg);
+extern MonitorEventMessage* CheckMonitorEvent(pgsocket fd, int millisec_timeout, bool *error_happened, int *mnum);
+extern void FreeMEMessagesAfterEvent(MonitorEventMessage *msg, int nmsg);
 
-bool is_valid_monitor_event(MonitorEvent event);
+extern bool is_valid_monitor_event(MonitorEvent event);
+
+
+extern void create_nonblocking_uds_socket(const char *socket_path, struct sockaddr_un *addr, pgsocket *sock);
+extern char* event_to_json(MonitorEvent event, const char* message, size_t *len);
+extern char *MonitorEventMessageToJSON(MonitorEventMessage *msg, size_t *len);
 
 
 /*

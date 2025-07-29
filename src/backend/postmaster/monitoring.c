@@ -11,7 +11,7 @@
  * So it is what it is)
  *
  * IDENTIFICATION
- *	  src/backend/postmaster/walwriter.c
+ *	  src/backend/postmaster/monitoring.c
  *
  *-------------------------------------------------------------------------
  */
@@ -48,6 +48,13 @@
 #include "catalog/pg_authid.h"
 #include "miscadmin.h"
 
+
+#include "utils/monitor_event_types.h"
+#include "monitor_event.h"
+#include <curl/curl.h>
+#include <string.h>
+#include <time.h>
+
 // for first stats data
 // define - они определены в каком-то ....c файле, поэтому их нельзя просто импортить (поэтому я вставила код сюда)
 // this staff is defined in some .c file (not header), so I've got to put it here
@@ -59,13 +66,88 @@
 #define USERS_NUMBER 5
 #define BUFF_SIZE 256
 
+#define COLLECTOR_URL	"http://localhost:4318/v1/logs"
+
 /*
  * There sould be GUC parameters if they are needed
  */
 
-void someActivityInfo(void);
 
-int formActivityInfo(char *buffer, Size max_size);
+#include <curl/curl.h>
+#include <string.h>
+#include <time.h>
+
+
+void send_log_to_collector(const char* json_message);
+
+void send_log_to_collector(const char* json_message) {
+    CURL *curl;
+    CURLcode res;
+    
+    curl_global_init(CURL_GLOBAL_ALL);
+    curl = curl_easy_init();
+
+    if (curl) {
+        char json_payload[2048];
+        struct curl_slist *headers = NULL;
+        FILE *debug_file;
+        long http_code = 0;
+        // Экранируем JSON-сообщение для вставки
+        char* escaped_json = curl_easy_escape(curl, json_message, 0);
+        if (!escaped_json) {
+            elog(LOG, "Failed to escape JSON message");
+            curl_easy_cleanup(curl);
+            curl_global_cleanup();
+            return;
+        }
+
+        // Формируем финальный payload
+        snprintf(
+            json_payload, sizeof(json_payload),
+            "{\"resourceLogs\":[{\"resource\":{},\"scopeLogs\":[{\"scope\":{},\"logRecords\":[{"
+            "\"timeUnixNano\":\"%llu\","
+            "\"body\":{\"stringValue\":\"%s\"},"
+            "\"severityText\":\"INFO\""
+            "}]}]}]}",
+            (unsigned long long)time(NULL) * 1000000000,
+            escaped_json  // Уже экранированная строка
+        );
+
+        // Устанавливаем заголовки
+        headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+
+        // Настройка CURL
+        curl_easy_setopt(curl, CURLOPT_URL, COLLECTOR_URL);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        
+        // Для отладки (можно убрать после тестов)
+        curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+        debug_file = fopen("/tmp/curl_debug.log", "a");
+        curl_easy_setopt(curl, CURLOPT_STDERR, debug_file);
+
+        // Отправка запроса
+        res = curl_easy_perform(curl);
+        
+        // Проверка результата
+        http_code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        
+        if (res != CURLE_OK) {
+            elog(LOG, "CURL failed: %s", curl_easy_strerror(res));
+        } else {
+            elog(LOG, "Request completed, HTTP status: %ld, Payload: %s", http_code, json_payload);
+        }
+
+        // Очистка
+        fclose(debug_file);
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        curl_free(escaped_json); 
+    }
+    curl_global_cleanup();
+}
 
 /*
  * Main entry point for monitoring process
@@ -87,10 +169,17 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
     int server_socket;
     int client_socket;
     struct sockaddr_in server_sockaddr;
-    struct sockaddr_in client_sockaddr;
-    char buffer[BUFF_SIZE];
     int error_check;
     int reuse = 1;
+	/////////////
+	int worker_number = MyProcPid;
+	pgsocket socket_fd;
+	struct sockaddr_un addr;
+	char path[64];
+	int flag = 0; 
+	MonitorEvent myEvent = ME_C;
+	/////////////
+
 
     Assert(startup_data_len == 0);
 
@@ -185,7 +274,33 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
 	 */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
-    
+//////////////////////////////////////////////////
+	elog(LOG, "[PID = %d] my number is %d\n\t\t myEvent is %d", MyProcPid, worker_number, myEvent);
+	
+	memset(path, 0, sizeof(path));
+	snprintf(path, sizeof(path), "%s%d", "/tmp/uds_epoll_example.sock", worker_number);
+
+
+	create_nonblocking_uds_socket(path, &addr, &socket_fd);
+	elog(LOG, "[PID = %d] socket was created %s", MyProcPid, path);
+
+	flag = 0;
+	for (MonitorEvent event = ME_A; event < MONITOR_EVENT_NUM_TYPES; event++) {
+		if (flag == 0) {
+			flag = SubscribeToMonitorEvent(event, socket_fd, addr);
+			if (flag == 1) {
+				elog(LOG, "[PID = %d] NOT SUCCEDED SUBSCRIBING to event %d", MyProcPid, event);
+			} else {
+
+			elog(LOG, "[PID = %d] subscribed to event %d", MyProcPid, event);
+			}
+			
+		} else {
+				elog(LOG, "[PID = %d] NOT SUCCEDED SUBSCRIBING to event %d", MyProcPid, event);
+		}
+	}
+
+//////////////////////////////////////////////////
 
 
     server_socket = socket(AF_INET, SOCK_DGRAM, 0);
@@ -215,36 +330,57 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
     }
 
     
-    while (1) {
-        /*
-        * 126 bc I think it's enough for 1 string for 1 backend
-        */
-        int sent_num = 0;
-        Size message_size = pgstat_fetch_stat_numbackends() * 126;
-        char *message = palloc(message_size);
-        int res_size = 0;
+    while (1) {int prev_flag = flag;
+		CHECK_FOR_INTERRUPTS();
 
-        elog(LOG, "monitoring process: ready to hear messages");
-        size_t len = sizeof(struct sockaddr);
-        if (recvfrom(server_socket, buffer, BUFF_SIZE, 0, (struct sockaddr *) &client_sockaddr, (socklen_t *) &len) == -1) {
-            elog(ERROR, "monitoring process: error recvfrom()");
-            close(server_socket);
-            goto loop;
-        }
+		if (!flag) {
+			char message[64];
+			bool error_flag = false;
+			MonitorEventMessage *me_messages;
+			int mnum = 0;
 
-        elog(LOG, "monitoring process: message from client: %s", buffer);
+			memset(message, 0, sizeof(message));
+			snprintf(message, sizeof(message), "%s%d", "messsage for ypu from process ", worker_number);
+			
+			NotifyMonitorEvent(myEvent, message, socket_fd);
 
-        res_size = formActivityInfo(message, message_size);
-        elog(LOG, "monitoring process: res_size: %d\n\t\tmessage to client: %s",res_size, message);
+			sleep(1);
+			me_messages = CheckMonitorEvent(socket_fd, 1000, &error_flag, &mnum);
 
-        if ((sent_num = sendto(server_socket, message, res_size, 0, (struct sockaddr *) &client_sockaddr, len)) == -1) {
-            elog(ERROR, "monitoring process: error sendto()");
-            close(server_socket);
-            goto loop;
-        }
+			if (error_flag == false) {
+				elog(LOG, "[ %d ] got messages = %d", MyProcPid, mnum );
+				for (int i = 0; i < mnum; i++) {
+					MonitorEventMessage msg = me_messages[i];
+					elog(LOG, "[ %d ] MESSAGE:\n\t\ttype = %d\n\t\tTime=%ld\n\t\tsender_pid = %d\n\t\tdata = %s",
+							MyProcPid, msg.event, msg.event_time, msg.sender_pid, msg.data);
+				}
+				
+				for (int i = 0; i < mnum; i++) {
+					size_t len = 0;
+					char *msg = MonitorEventMessageToJSON(&(me_messages[i]), &len);
+					elog(LOG, "sending log to collector: \n%s\n", msg);
+                    send_log_to_collector(msg);
+					pfree(msg);
+                    // send_log_to_collector(&(me_messages[i]));
+				}
 
-        elog(LOG, "monitoring process:message was sent to client: %d", sent_num);
-        pfree(message);
+				// send_log_to_collector(log_data);
+
+			} else {
+				elog(LOG, "got errors during checking monitoring events, look at logs");
+			}
+
+			if (me_messages != NULL) {
+				FreeMEMessagesAfterEvent(me_messages, mnum);
+			}
+
+		}
+		flag = prev_flag;
+		
+
+		ereport(LOG, errmsg("test_mes_health_check"));
+
+		sleep(3);
     }
 
 
@@ -258,192 +394,9 @@ MonitoringProcessMain(char *startup_data, size_t startup_data_len)
 	for (;;)
 	{
         elog(LOG, "monitoring process is working now!!! counter = %d", counter);
-        // elog(LOG, "monitoring line: %d", __LINE__);
         counter += 1;
         pg_usleep( 3000L * 1000L);
     }
 
 }
 
-
-void someActivityInfo(void) {
-	int			num_backends = pgstat_fetch_stat_numbackends();
-	int			curr_backend;
-
-    elog(LOG, "got some activity info!");
-    elog(LOG, "num of backednds: %d", num_backends);
-	for (curr_backend = 1; curr_backend <= num_backends; curr_backend++) {
-		LocalPgBackendStatus *local_beentry;
-		PgBackendStatus *beentry;
-		PGPROC	   *proc;
-		int32 leader_pid = 0;
-		char *clipped_activity;
-		char *type = "null";
-		TimestampTz startProcTime = NULL;
-		/* Get the next one in the list */
-		local_beentry = pgstat_get_local_beentry_by_index(curr_backend);
-		beentry = &local_beentry->backendStatus;
-
-		switch (beentry->st_backendType)
-		{
-			case B_ARCHIVER:
-				type = "B_ARCHIVER";
-				break;
-			case B_BG_WRITER:
-				type = "B_BG_WRITER";
-				break;
-			case B_CHECKPOINTER:
-				type = "B_CHECKPOINTER";
-				break;
-			case B_STARTUP:
-				type = "B_STARTUP";
-				break;	
-            case B_WAL_WRITER:
-				type = "B_WAL_WRITER";
-				break;
-            case B_WAL_SUMMARIZER:
-				type = "B_WAL_SUMMARIZER";
-				break;	
-            case B_WAL_RECEIVER:
-				type = "B_WAL_RECEIVER";
-				break;	
-            case B_MONITORING:
-				type = "B_MONITORING";
-				break;	
-			default:
-				type = "NULL";
-				break;
-		}
-		
-
-			clipped_activity = pgstat_clip_activity(beentry->st_activity_raw);
-			proc = BackendPidGetProc(beentry->st_procpid);
-			if (proc == NULL && (beentry->st_backendType != B_BACKEND))
-			{
-				/*
-				 * For an auxiliary process, retrieve process info from
-				 * AuxiliaryProcs stored in shared-memory.
-				 */
-				proc = AuxiliaryPidGetProc(beentry->st_procpid);
-			}
-			if (proc != NULL)
-			{
-				uint32		raw_wait_event;
-				PGPROC	   *leader;
-				raw_wait_event = UINT32_ACCESS_ONCE(proc->wait_event_info);
-				leader = proc->lockGroupLeader;
-				/*
-				 * Show the leader only for active parallel workers.  This
-				 * leaves the field as NULL for the leader of a parallel group
-				 * or the leader of parallel apply workers.
-				 */
-				if (leader && leader->pid != beentry->st_procpid)
-				{
-					leader_pid = leader->pid;
-				}
-				else if (beentry->st_backendType == B_BG_WORKER)
-				{
-					leader_pid = GetLeaderApplyWorkerPid(beentry->st_procpid);
-				}
-			}
-			// it might be 0
-			startProcTime = beentry->st_proc_start_timestamp;
-			elog(LOG, "[Recovery] PID=%d LEADER_PID=%d StartTime=%ld BACKEND_TYPE=%s", 
-				proc->pid, leader_pid, (long)startProcTime, type);
-			pfree(clipped_activity);
-	
-	}
-}
-
-
-int formActivityInfo(char *buffer, Size max_size) {
-    int			num_backends = pgstat_fetch_stat_numbackends();
-	int			curr_backend;
-
-    memset(buffer, 0, max_size);
-
-    pg_sprintf(buffer,"num of backednds: %d\n", num_backends);
-
-    for (curr_backend = 1; curr_backend <= num_backends; curr_backend++) {
-		LocalPgBackendStatus *local_beentry;
-		PgBackendStatus *beentry;
-		PGPROC	   *proc;
-		int32 leader_pid = 0;
-		char *clipped_activity;
-		char *type = "null";
-		TimestampTz startProcTime = NULL;
-		/* Get the next one in the list */
-		local_beentry = pgstat_get_local_beentry_by_index(curr_backend);
-		beentry = &local_beentry->backendStatus;
-
-		switch (beentry->st_backendType)
-		{
-			case B_ARCHIVER:
-				type = "B_ARCHIVER";
-				break;
-			case B_BG_WRITER:
-				type = "B_BG_WRITER";
-				break;
-			case B_CHECKPOINTER:
-				type = "B_CHECKPOINTER";
-				break;
-			case B_STARTUP:
-				type = "B_STARTUP";
-				break;	
-            case B_WAL_WRITER:
-				type = "B_WAL_WRITER";
-				break;
-            case B_WAL_SUMMARIZER:
-				type = "B_WAL_SUMMARIZER";
-				break;	
-            case B_WAL_RECEIVER:
-				type = "B_WAL_RECEIVER";
-				break;	
-            case B_MONITORING:
-				type = "B_MONITORING";
-				break;	
-			default:
-				type = "NULL";
-				break;
-		}
-		
-
-			clipped_activity = pgstat_clip_activity(beentry->st_activity_raw);
-			proc = BackendPidGetProc(beentry->st_procpid);
-			if (proc == NULL && (beentry->st_backendType != B_BACKEND))
-			{
-				/*
-				 * For an auxiliary process, retrieve process info from
-				 * AuxiliaryProcs stored in shared-memory.
-				 */
-				proc = AuxiliaryPidGetProc(beentry->st_procpid);
-			}
-			if (proc != NULL)
-			{
-				uint32		raw_wait_event;
-				PGPROC	   *leader;
-				raw_wait_event = UINT32_ACCESS_ONCE(proc->wait_event_info);
-				leader = proc->lockGroupLeader;
-				/*
-				 * Show the leader only for active parallel workers.  This
-				 * leaves the field as NULL for the leader of a parallel group
-				 * or the leader of parallel apply workers.
-				 */
-				if (leader && leader->pid != beentry->st_procpid)
-				{
-					leader_pid = leader->pid;
-				}
-				else if (beentry->st_backendType == B_BG_WORKER)
-				{
-					leader_pid = GetLeaderApplyWorkerPid(beentry->st_procpid);
-				}
-			}
-			startProcTime = beentry->st_proc_start_timestamp;
-            pg_sprintf(buffer + strlen(buffer), "PID=%d StartTime=%ld BACKEND_TYPE=%s\n", 
-				proc->pid, (long)startProcTime, type);
-			pfree(clipped_activity);
-	
-	}
-
-    return(strlen(buffer));
-}
