@@ -366,6 +366,7 @@ typedef enum BackendType
 	B_WAL_RECEIVER,
 	B_WAL_SUMMARIZER,
 	B_WAL_WRITER,
+	B_MONITORING,
 
 	/*
 	 * Logger is not connected to shared memory and does not have a PGPROC

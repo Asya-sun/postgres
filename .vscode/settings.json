@@ -1,5 +1,16 @@
 {
     "files.associations": {
-        "spi_priv.h": "c"
+        "spi_priv.h": "c",
+        "proctypelist.h": "c",
+        "slotsync.h": "c",
+        "syslogger.h": "c",
+        "walsummarizer.h": "c",
+        "pgarch.h": "c",
+        "fork_process.h": "c",
+        "bgworker_internals.h": "c",
+        "autovacuum.h": "c",
+        "ipc.h": "c",
+        "pqsignal.h": "c",
+        "interrupt.h": "c"
     }
 }
