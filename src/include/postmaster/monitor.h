@@ -57,11 +57,15 @@ typedef struct _subjectKey
 	char name[MAX_SUBJECT_LEN];
 } SubjectKey;
 
+typedef struct _subscriberInfo {
+	pid_t proc_pid;
+	
+} SubscriberInfo;
+
 // monitor sub system shared state
 typedef struct mssSharedState
 {
 	LWLock *lock; /* protects hashtable search/modification */
-
 
 } mssSharedState;
 
