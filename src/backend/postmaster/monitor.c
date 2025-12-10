@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * monitoring.c
+ * monitor.c
  *
  * This is prototype for special monitor system.
  * The idea is that monitoring is implemented through usual backends,
@@ -11,7 +11,7 @@
  * So it is what it is)
  *
  * IDENTIFICATION
- *	  src/backend/postmaster/monitoring.c
+ *	  src/backend/postmaster/monitor.c
  *
  *-------------------------------------------------------------------------
  */
@@ -19,6 +19,7 @@
 #include "postgres.h"
 #include "libpq/pqsignal.h"
 #include "postmaster/interrupt.h"
+#include "monitorsubsystem/monitor_event.h"
 
 
 Size MonitorShmemSize(void)
@@ -26,7 +27,7 @@ Size MonitorShmemSize(void)
 
 }
 
-extern void MonitorShmemInit(void)
+void MonitorShmemInit(void)
 {
 
 }
