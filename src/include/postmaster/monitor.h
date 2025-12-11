@@ -33,6 +33,7 @@ int max_processes = MaxBackends + max_worker_processes + autovacuum_max_workers 
 #define MAX_SUBS_BIT_NUM (MAX_SUBS_NUM + 64 - 1) / 64
 
 #define MAX_SUBJECT_LEN 25
+#define MAX_SUBJECT_BIT_NUM (MAX_SUBS_NUM + 64 - 1) / 64
 
 typedef enum
 {
@@ -57,11 +58,46 @@ typedef struct _subjectKey
 	char name[MAX_SUBJECT_LEN];
 } SubjectKey;
 
-typedef struct _subscriberInfo
+/*
+ * key -> SubjectEntity hash entry
+ */
+typedef struct mssEntry {
+	SubjectKey key;	/* hash key */
+	int subjectEntityId; /* id в массиве с SubectEntity */
+	/* возможно нужна лочка */
+
+} mssEntry;
+
+
+
+/*
+ * Для быстрой отписки (чтобы не итерировать по всем записям в хеше)
+ * подписчик должен хранить информацию о том, на что он подписан
+ * Это должно занимать поменьше памяти (по возможности)
+ * Поэтому есть 2 вариант
+ * 1.
+ * сделать массив SubjectEntity вне хеш мапы, в хеш мапе сделать offset/id of SubjectEntity
+ * А в SubscriberInfo хранить что-то типа битового массива на SubjectEntity
+ * Однако чтобы использовать что-то типа битового массива / битовой маске, нужно
+ * заранее знать максимальное число записей
+ *
+ * 2.
+ * хранить SubjectEntity прямо в хеш-мапе, а в SubsctiberInfo хранить какой-нибудь offset
+ * HTAB (dynahash) НЕ переставляет записи
+ * НО тогда в SubscriberInfo придется хранить что-то вроде массива из offset'ов
+ * (в хеш-мапе нет никаких "индексов" - поэтому сделать битовый массив как в 1 варианте нельзя)
+ *
+ * ВАРИАНТ 1 WINS
+ *
+ */
+typedef struct SubscriberInfo
 {
 	pid_t proc_pid;
 	/* тут микро вопрос, как это норм задавать - возможно, лучше не через указатели, а через offset и тд... */
 	monitor_channel *channel;
+
+	LWLock lock;
+	uint64 bitmap[MAX_SUBJECT_BIT_NUM]; /* битовый массив subjectId, на которые подписчан подписчик*/
 } SubscriberInfo;
 
 typedef struct PublisherInfo
@@ -126,8 +162,7 @@ typedef struct mssSharedState
 
 	SubjectEntity *subjectEntities;
 
-	/* maybe needed*/
-	// LWLock *lock; /* protects hashtable search/modification */
+	LWLock *lock; /* protects hashtable search/modification */
 	HTAB *mss_hash = NULL;	/* hashtable for SubjectKey - SubjectEntity */
 
 } mssSharedState;

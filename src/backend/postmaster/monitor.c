@@ -54,7 +54,10 @@ Size MonitorShmemSize(void)
 	sz = add_size(sz, mss_publisherInfo_size());
 	sz = add_size(sz, mss_subjectEntity_size());
 
-	/* тут должно быть че-то для хеш таблицы */
+	/* for hash table */
+	sz = add_size(sz,
+              hash_estimate_size(MAX_SUBJECT_NUM,
+                                 sizeof(mssEntry)));
 
 	return sz;
 }
