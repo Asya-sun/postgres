@@ -37,7 +37,7 @@ struct monitor_channel
 	const ChannelOps *ops;
 	void *impl; /* реализация канала */
 
-}
+};
 
 static inline bool
 channel_init(monitor_channel *ch, const ChannelOps *ops,
@@ -50,7 +50,7 @@ channel_init(monitor_channel *ch, const ChannelOps *ops,
 	 *
 	 */
 	ch->ops = ops;
-	return ops->init(ch, sixe, arg);
+	return ops->init(ch, size, arg);
 }
 
 static inline bool

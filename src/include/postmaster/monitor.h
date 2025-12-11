@@ -16,12 +16,12 @@
  * в .с - реализация
  */
 
-
 #ifndef _MONITOR_H
 #define _MONITOR_H
 #include "port/atomics.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
+#include "monitorsubsystem/monitor_channel.h"
 
 // допустим
 int max_processes = MaxBackends + max_worker_processes + autovacuum_max_workers + max_parallel_workers + 1;
@@ -57,22 +57,80 @@ typedef struct _subjectKey
 	char name[MAX_SUBJECT_LEN];
 } SubjectKey;
 
-typedef struct _subscriberInfo {
+typedef struct _subscriberInfo
+{
 	pid_t proc_pid;
-	
+	/* тут микро вопрос, как это норм задавать - возможно, лучше не через указатели, а через offset и тд... */
+	monitor_channel *channel;
 } SubscriberInfo;
 
-// monitor sub system shared state
+typedef struct PublisherInfo
+{
+	/* мб еще лочку надо добавить */
+	pid_t proc_pid;
+	monitor_channel *sub_channel;
+} PublisherInfo;
+
+
+typedef struct MssState_SubscriberInfo
+{
+	LWLock lock;
+	SubscriberInfo *subscribers;
+
+	/* just in case 16, 8 might be enough */
+	uint16 max_subs_num;
+	uit16 current_subs_num;
+
+} MssState_SubscriberInfo;
+
+typedef struct MssState_PublisherInfo
+{
+	LWLock lock;
+	PublisherInfo *publishers;
+
+	/* just in case 16, 8 might be enough */
+	uint16 max_pubs_num;
+	uit16 current_pubs_num;
+
+} MssState_PublisherInfo;
+
+
+
+/*
+ * еще раз - в разделяемой памяти лежит
+ * структура (пока массив) со списком подписчиков
+ * массив subjectEntities
+ * хеш-мапа с соотношением subject-SubjectEntities
+ * структура, где должны регистрироваться издатели
+ *
+ * к этим структурам должен быть доступ функциям подписаться-отписаться и тд
+ * поэтому обернем все это в общую структуру с этим всем...
+ *
+ * возможно хеш-таблицу можно было бы и вынести отдельно, типа
+ * static HTAB *mss_hash = NULL;
+ * но я пока не решила
+ */
+
+/*
+ * Central shared memory entry for the monitor subsystem
+ *
+ * SubsribersInfo, Publishers, subject-subscribers (SubjectEntities) hashtable
+ * are reached from here.
+ *
+*/
 typedef struct mssSharedState
 {
-	LWLock *lock; /* protects hashtable search/modification */
+	/* maybe needed someting else*/
+	MssState_SubscriberInfo sub;
+	MssState_PublisherInfo pub;
+
+	SubjectEntity *subjectEntities;
+
+	/* maybe needed*/
+	// LWLock *lock; /* protects hashtable search/modification */
+	HTAB *mss_hash = NULL;	/* hashtable for SubjectKey - SubjectEntity */
 
 } mssSharedState;
-
-// нужна хеш-мапа для subject (string) и subjectentities
-
-
-static HTAB *mss_hash = NULL;
 
 /*
  * Небольшое описание, что можно было бы сделать лучше или под вопросом
@@ -80,9 +138,7 @@ static HTAB *mss_hash = NULL;
  *
  */
 
-
-
-//I take an example from walwriter (src/backend/postmaster/walwriter.c) and other backgrounds
+// I take an example from walwriter (src/backend/postmaster/walwriter.c) and other backgrounds
 pg_noreturn extern void MonitoringProcessMain(char *startup_data, size_t startup_data_len);
 
 /*
@@ -103,4 +159,4 @@ extern void MonitorShmemInit(void);
 // extern void PgArchWakeup(void);
 // extern void PgArchForceDirScan(void);
 
-#endif							/* _MONITOR_H */
+#endif /* _MONITOR_H */

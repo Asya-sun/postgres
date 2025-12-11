@@ -1,15 +1,13 @@
 /*-------------------------------------------------------------------------
  *
- * monitor_channel_mq.c
+ * monitor_channel_shm_mq.c
  *	  Implementation of monitor channel api, based on shm_mq
  *
  * IDENTIFICATION
- *	  src/include/monitorsubsystem/monitor_channel.c
+ *	  src/backend/monitorsubsystem/monitor_channel_shm_mq.c
  *
  *-------------------------------------------------------------------------
  */
-#ifndef SHM_MQ_MONITOR_CHANNEL
-#define SHM_MQ_MONITOR_CHANNEL
 #include "postgres.h"
 #include "monitorsubsystem/monitor_channel.h"
 #include "storage/shm_mq.h"
@@ -58,4 +56,3 @@ shm_mq_channel_cleanup(monitor_channel *ch)
 	return ch->ops->cleanup(ch);
 }
 
-#endif /* SHM_MQ_MONITOR_CHANNEL */
