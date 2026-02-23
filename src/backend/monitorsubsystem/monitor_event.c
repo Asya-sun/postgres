@@ -135,22 +135,21 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
     if (sub_id == -1)
     {
         LWLockRelease(&sharedSubInfo->lock);
-
         return -1;
     }
 
     /* allocate memory for the monitor channel */
     myChannel = &monSubSysLocal.MonSubSystem_SharedState->channels[sub_id + MAX_PUBS_NUM];
-    
-    conConfig->channel_id = sub_id + MAX_PUBS_NUM;
 
+    conConfig->channel_id = sub_id + MAX_PUBS_NUM;
+    elog(LOG_LEVEL, "\npg_monitor_con_connect.c line: %d\n  conConfig->channel_id %d", __LINE__, conConfig->channel_id);
     
     is_channel_created = monitor_channel_options[conConfig->type]->init(myChannel, conConfig);
 	elog(LOG_LEVEL, "\npg_monitor_con_connect.c line: %d\n  is_channel_created %d", __LINE__, is_channel_created);
 
     if (! is_channel_created) {
         LWLockRelease(&sharedSubInfo->lock);
-        elog(DEBUG1, "Couldn't create a channel");
+        elog(LOG_LEVEL, "Couldn't create a channel");
         return -1 ;
     }
 

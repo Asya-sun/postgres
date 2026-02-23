@@ -65,6 +65,11 @@ typedef enum
 
 typedef struct ChannelOps
 {
+    /*
+     * init - Initialization of the certain type of channel
+     * return true on success, else false 
+     * 
+     */
 	bool (*init)(monitor_channel *ch, MonitorChannelConfig *arg);
 	bool (*send_msg)(monitor_channel *ch, const void *data, Size len);
 	ChannelRecvResult (*receive_one_msg)(monitor_channel *ch, void *buf, Size buf_size, Size *out_len);

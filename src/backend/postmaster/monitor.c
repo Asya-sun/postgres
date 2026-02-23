@@ -155,6 +155,7 @@ void MonitorShmemInit(void)
 	(mssSharedState *) ShmemInitStruct("Monitoring Subsystem Data",
 						MonitorShmemSize(),
 						&found);
+	elog(LOG, "\nMONITOR.C 	MonitorShmemSize = %zu", MonitorShmemSize());
 
 	if (!found)
 	{

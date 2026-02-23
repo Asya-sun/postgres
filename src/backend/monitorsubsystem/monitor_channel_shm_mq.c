@@ -18,6 +18,9 @@
 #include "storage/shm_toc.h"
 #include "utils/memutils.h"
 
+
+#define LOG_LEVEL LOG
+
 const ChannelOps ShmMqChannelOps = {
 	.init = shm_mq_channel_init,
 	.send_msg = shm_mq_channel_send_msg,
@@ -27,6 +30,9 @@ const ChannelOps ShmMqChannelOps = {
 
 bool
 /*
+ * Initialization of shm_mq_channel
+ * return true on success, else false 
+ * 
  * Есть shm_mq_handle - это backend-local структура для уже 
  * существующей shm_mq, через который конкретный процесс
  * будет с ней работать
@@ -57,13 +63,17 @@ shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
 	Size sz = cfg->u.shm_mq.mq_size + sizeof(ShmMqChannelData) + sizeof(ShmMqChannelLocal);
 	ShmMqChannelData *data;
 	void *mq_space;
+    elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n  toc %p", __LINE__, toc);
 
 	data = shm_toc_allocate(toc, sz);
+    elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n  data %p", __LINE__, data);
 	mq_space = (void *)((char *)data + sizeof(ShmMqChannelData) + sizeof(ShmMqChannelLocal));
 
 	data->mq = shm_mq_create(mq_space, cfg->u.shm_mq.mq_size);
 
+    elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n  data->mq %p", __LINE__, data->mq);
     SpinLockAcquire(&ch->mutex);
+    elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n", __LINE__);
 	ch->private_data = data;
 	ch->ops = &ShmMqChannelOps;
 

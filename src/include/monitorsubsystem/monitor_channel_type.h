@@ -17,7 +17,7 @@
  * It might be better to put it another place.
  * For the start size is equal to PARALLEL_ERROR_QUEUE_SIZE
  */
-#define MONITOR_MESSAGE_SHM_QUEUE_SIZE			16384
+#define MONITOR_MESSAGE_SHM_QUEUE_SIZE			8192
 
 typedef enum
 {
