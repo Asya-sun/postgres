@@ -8,22 +8,34 @@
  *
  *-------------------------------------------------------------------------
  */
-
+#include "postgres.h"
 #include <string.h>
  
 #include "postmaster/monitor.h"
 #include "monitorsubsystem/monitor_channel_type.h"
-#include "postgres.h"
 #include "monitorsubsystem/monitor_channel.h"
 #include "monitorsubsystem/monitor_event.h"
 #include "miscadmin.h"
 #include "storage/proc.h"
+#include "storage/procnumber.h"
 #include "utils/memutils.h"
 
 #define BIT_WORD(idx) ((idx) / 64)
 #define BIT_MASK(idx) (1ULL << ((idx) % 64))
 
+#define LOG_LEVEL LOG
+
 static int mss_alloc_subject_id(void);
+
+/*
+ * I don't know whether it's good idea to create 
+ * monitorsubsystem/monitor_channel_type.c
+ * ONLY for this definition, so currently I put it here
+ * 
+ */
+const ChannelOps *monitor_channel_options[] = {
+    [MONITOR_CHANNEL_SHM_MQ] = &ShmMqChannelOps,
+};
 
 static void
 MonitorEnsureContext(void)
@@ -71,6 +83,7 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
 	SubscriberInfo *mySubInfo;
     monitor_channel *myChannel;
     MssState_SubscriberInfo *sharedSubInfo = &monSubSysLocal.MonSubSystem_SharedState->sub;
+    bool is_channel_created;
 
     MonitorEnsureContext();
     MemoryContextSwitchTo(monSubSysLocal.ctx);
@@ -81,6 +94,7 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
 	 * TODO:
 	 * Check if monitor_proc_no is valid
 	 */
+	elog(LOG_LEVEL, "\npg_monitor_con_connect.c line: %d\n  monitor_proc_no %d", __LINE__, monitor_proc_no);
     
     LWLockRelease(&monSubSysLocal.MonSubSystem_SharedState->lock);
 
@@ -116,6 +130,7 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
         }
         LWLockRelease(&sub->lock);
     }
+	elog(LOG_LEVEL, "\npg_monitor_con_connect.c line: %d\n  sub_id %d", __LINE__, sub_id);
     
     if (sub_id == -1)
     {
@@ -123,48 +138,15 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
 
         return -1;
     }
-    
-    /*
-     * TODO:
-     * make an adequate channel creation depending on the type of the channel
-     * 
-     */
 
-    /*
-     * allocate memory for the monitor channel
-     * 
-     * QUESTION:
-     * Should memory be allocated here
-     * or during MonitorShmemInit and be in MonSubSystem_SharedState??? 
-     */
-    /*
-     * в чем вообще проблема
-     * 1 где выделять память под каналы? с учетом того, что они ДОЛЖНЫ
-     * быть доступны процессу мониторинга (= лежать в разделяемой памяти)
-     * при этом как будто все структуры, которые касаются этих каналов, ТОЖЕ
-     * должны быть доступны процессу мониторинга
-     * (ну вот есть канал, а еще у него есть такая штука, как void *private_data, где он,
-     * по моему мнению, должен хранить всякую доп инфу о себе, В ЗАВИСИМОСТИ от типа своего канала
-     * (Например, для shm_mq_monitor_channel там должны быть всякие shm_mq* и shm_mq_handle*, 
-     * вот такого рода штуки))
-     * 
-     * Окей, кому вообще нужны эти каналы?
-     * Они нужны процессу мониторинга и получетелям канала / отправителям канала
-     * 
-     * Как сейчас доступаются к этому каналу?
-     * есть ссылки в SubscriberInfo и в PublisherInfo на каналы, но при этом эти каналы
-     * создаются Бог пойми где
-     * вот сейчас (пока что) есть эта "плохая" строчка 
-     * myChannel = (monitor_channel *)palloc(sizeof(monitor_channel));
-     * 
-     * 
-     */
+    /* allocate memory for the monitor channel */
     myChannel = &monSubSysLocal.MonSubSystem_SharedState->channels[sub_id + MAX_PUBS_NUM];
     
     conConfig->channel_id = sub_id + MAX_PUBS_NUM;
 
     
-    bool is_channel_created = monitor_channel_options[conConfig->type].init(myChannel, conConfig);
+    is_channel_created = monitor_channel_options[conConfig->type]->init(myChannel, conConfig);
+	elog(LOG_LEVEL, "\npg_monitor_con_connect.c line: %d\n  is_channel_created %d", __LINE__, is_channel_created);
 
     if (! is_channel_created) {
         LWLockRelease(&sharedSubInfo->lock);
@@ -213,7 +195,8 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
 	PublisherInfo *myPubInfo;
     monitor_channel *myChannel;
     MssState_PublisherInfo *sharedPubInfo = &monSubSysLocal.MonSubSystem_SharedState->pub;
-    
+    bool is_channel_created;
+
     MonitorEnsureContext();
     
     LWLockAcquire(&monSubSysLocal.MonSubSystem_SharedState->lock, LW_EXCLUSIVE);
@@ -222,6 +205,7 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
 	 * TODO:
 	 * Check if monitor_proc_no is valid
 	 */
+    elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  monitor_proc_no %d", __LINE__, monitor_proc_no);
     
     LWLockRelease(&monSubSysLocal.MonSubSystem_SharedState->lock);
     
@@ -236,26 +220,24 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
     for (int i = 0; i < sharedPubInfo->max_pubs_num; i++)
     {
         PublisherInfo *pub = &sharedPubInfo->publishers[i];
-        // bool res = LWLockConditionalAcquire(&pub->lock, LW_EXCLUSIVE);
-        // if (!res) {
-        //     /* it's supposed that smbd working on it, so let's continue*/
-        //     continue;
-        // }
         /*
          * TODO: select more appropriate criteria that this 
          * PublisherInfo is free and add additional checks
          */
+
+        SpinLockAcquire(&pub->mutex);
         if (pub->id == -1) {
             myPubInfo = pub;
             pub_id = i;
             myPubInfo->proc_pid = MyProcPid;
             myPubInfo->id = pub_id;
             
-            // LWLockRelease(&pub->lock);
+            SpinLockRelease(&pub->mutex);
             break;
         }
-        // LWLockRelease(&pub->lock);
+        SpinLockRelease(&pub->mutex);
     }
+    elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  pub_id %d", __LINE__, pub_id);
     
     if (pub_id == -1)
     {
@@ -274,7 +256,8 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
     conConfig->publisher_procno = MyProcNumber;
     conConfig->subscriber_procno = monitor_proc_no;
     
-    bool is_channel_created = monitor_channel_options[conConfig->type].init(myChannel, conConfig);
+    is_channel_created = monitor_channel_options[conConfig->type]->init(myChannel, conConfig);
+    elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  is_channel_created %d", __LINE__, is_channel_created);
 
     if (! is_channel_created) {
         LWLockRelease(&sharedPubInfo->lock);
@@ -286,15 +269,14 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
      * maybe it'd be easier just not to release lock 
      * immideatly after finding myPubInfo
      */
-    // LWLockAcquire(&myPubInfo->lock, LW_EXCLUSIVE);
-
+    SpinLockAcquire(&myPubInfo->mutex);
     myPubInfo->channel = myChannel;
     
     sharedPubInfo->current_pubs_num++;
     monSubSysLocal.myPubInfo = myPubInfo;
 
 
-    // LWLockRelease(&myPubInfo->lock);
+    SpinLockRelease(&myPubInfo->mutex);
     LWLockRelease(&sharedPubInfo->lock);
     
     return 0;
@@ -312,6 +294,11 @@ MSS_SUBSCRIBE_RESULT pg_monitor_subscribe_to_event(const char *event_string, rou
     bool found;
     SubjectKey key;
     int subjectId;
+    int subId;
+    int word;
+    uint64 mask;
+    int subj_word;
+    uint64 subj_mask;
 
     if (local->mySubInfo == NULL)
     {
@@ -328,7 +315,7 @@ MSS_SUBSCRIBE_RESULT pg_monitor_subscribe_to_event(const char *event_string, rou
 
     if (strlen(event_string) >= MAX_SUBJECT_LEN)
     {
-        elog(DEBUG1, "Invalid arg: string is too long: %d", strlen(event_string));  
+        elog(DEBUG1, "Invalid arg: string is too long: %ld", strlen(event_string));  
         return MSS_ERR_INVALID_ARG;
     }
 
@@ -387,9 +374,9 @@ MSS_SUBSCRIBE_RESULT pg_monitor_subscribe_to_event(const char *event_string, rou
 
     /* update SubjectEntity bitmap */
 
-    int subId = sub->id;
-    int word = BIT_WORD(subId);
-    uint64 mask = BIT_MASK(subId);
+    subId = sub->id;
+    word = BIT_WORD(subId);
+    mask = BIT_MASK(subId);
 
     pg_atomic_fetch_or_u64(&subject->bitmap_subs[word], mask);
 
@@ -397,8 +384,8 @@ MSS_SUBSCRIBE_RESULT pg_monitor_subscribe_to_event(const char *event_string, rou
 
     LWLockAcquire(&sub->lock, LW_EXCLUSIVE);
 
-    int subj_word = BIT_WORD(subjectId);
-    uint64 subj_mask = BIT_MASK(subjectId);
+    subj_word = BIT_WORD(subjectId);
+    subj_mask = BIT_MASK(subjectId);
 
     sub->bitmap[subj_word] |= subj_mask;
 

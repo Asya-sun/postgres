@@ -198,6 +198,7 @@ void MonitorShmemInit(void)
 		for (int i = 0; i < MAX_PUBS_NUM; i++)
 		{
 			PublisherInfo *pub = &monSubSysLocal.MonSubSystem_SharedState->pub.publishers[i];
+			SpinLockInit(&pub->mutex);
 			pub->id = -1;
 			pub->proc_pid = 0;
 			pub->channel = NULL;

@@ -13,6 +13,11 @@
 // #include "postgres.h"
 #include "monitorsubsystem/monitor_channel.h"
 #include "monitorsubsystem/monitor_channel_shm_mq.h"
+/*
+ * It might be better to put it another place.
+ * For the start size is equal to PARALLEL_ERROR_QUEUE_SIZE
+ */
+#define MONITOR_MESSAGE_SHM_QUEUE_SIZE			16384
 
 typedef enum
 {
@@ -41,11 +46,9 @@ typedef struct MonitorChannelConfig
 #define MONITOR_CHANNEL_NUM_TYPES (MONITOR_CHANNEL_SHM_MQ + 1)
 
 
+extern const ChannelOps *monitor_channel_options[];
 
-static ChannelOps monitor_channel_options[] = {
-    [MONITOR_CHANNEL_SHM_MQ] = ShmMqChannelOps,
-};
-
+extern const ChannelOps ShmMqChannelOps;
 
 
 #endif /* MONITOR_CHANNEL_TYPE */

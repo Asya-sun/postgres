@@ -35,23 +35,18 @@ typedef struct ShmMqChannelLocal
 } ShmMqChannelLocal;
 
 
-static bool shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *arg);
+bool shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *arg);
 
-static bool shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len);
+bool shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len);
 
-static ChannelRecvResult shm_mq_channel_receive_msg(monitor_channel *ch, void *buf, Size buf_size, Size *out_len);
+ChannelRecvResult shm_mq_channel_receive_msg(monitor_channel *ch, void *buf, Size buf_size, Size *out_len);
 
-static void shm_mq_channel_cleanup(monitor_channel *ch);
+void shm_mq_channel_cleanup(monitor_channel *ch);
 
-static void shm_mq_channel_attach(monitor_channel *ch);
+void shm_mq_channel_attach(monitor_channel *ch);
 
-static void (*detach)(monitor_channel *ch, void *local);
+void shm_mq_channel_detach (monitor_channel *ch, void *local);
 
-const ChannelOps ShmMqChannelOps = {
-	.init = shm_mq_channel_init,
-	.send_msg = shm_mq_channel_send_msg,
-	.receive_one_msg = shm_mq_channel_receive_msg,
-	.cleanup = shm_mq_channel_cleanup
-};
+extern const ChannelOps ShmMqChannelOps;
 
 #endif /* SHM_MQ_MONITOR_CHANNEL_H */

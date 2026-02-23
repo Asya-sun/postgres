@@ -18,9 +18,14 @@
 #include "storage/shm_toc.h"
 #include "utils/memutils.h"
 
+const ChannelOps ShmMqChannelOps = {
+	.init = shm_mq_channel_init,
+	.send_msg = shm_mq_channel_send_msg,
+	.receive_one_msg = shm_mq_channel_receive_msg,
+	.cleanup = shm_mq_channel_cleanup
+};
 
-/* static needed ? */
-static bool
+bool
 /*
  * Есть shm_mq_handle - это backend-local структура для уже 
  * существующей shm_mq, через который конкретный процесс
@@ -54,7 +59,7 @@ shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
 	void *mq_space;
 
 	data = shm_toc_allocate(toc, sz);
-	mq_space = (void *)data + sizeof(ShmMqChannelData) + sizeof(ShmMqChannelLocal);
+	mq_space = (void *)((char *)data + sizeof(ShmMqChannelData) + sizeof(ShmMqChannelLocal));
 
 	data->mq = shm_mq_create(mq_space, cfg->u.shm_mq.mq_size);
 
@@ -79,8 +84,7 @@ shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
 void
 shm_mq_channel_attach(monitor_channel *ch)
 {
-    MemoryContext oldcontext;   
-    PGPROC *monitor, *anotherProc;
+    MemoryContext oldcontext;
     monitor_channel *shared_channels = monSubSysLocal.MonSubSystem_SharedState->channels;
     ShmMqChannelData *data = ch->private_data;
     ShmMqChannelLocal *local;
@@ -101,8 +105,10 @@ shm_mq_channel_attach(monitor_channel *ch)
 
     SpinLockAcquire(&ch->mutex);
     if (AmMonitorSubsystemProcess()) {
+        int channel_id;
         Assert(ch >= &shared_channels[0] && ch <  &shared_channels[MAX_MONITOR_CHANNELS_NUM - 1]);
-        int channel_id = ch- shared_channels; 
+        
+        channel_id = ch- shared_channels; 
         monSubSysLocal.monitorLocal.channelsLocalData[channel_id] = local;
         ch->attach_flags |= CH_ATTACH_MONITOR;
     } else {
@@ -125,7 +131,7 @@ shm_mq_channel_attach(monitor_channel *ch)
         shm_mq_set_receiver(data->mq, &ProcGlobal->allProcs[ch->subscriber_procno]);
     }
     if (channel_is_ready(ch->attach_flags))
-    if (ch->attach_flags == CH_ATTACH_READY)
+    if (ch->attach_flags == CH_ATTACH_ACTIVE)
     {
         ch->state = CH_ACTIVE;
     }
@@ -139,7 +145,7 @@ shm_mq_channel_attach(monitor_channel *ch)
  * TODO:
  * mind all checks
  */
-static bool
+bool
 shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len)
 {
     ShmMqChannelLocal *local;
@@ -183,7 +189,7 @@ shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len)
  * TODO:
  * mind all checks
  */
-static ChannelRecvResult
+ChannelRecvResult
 shm_mq_channel_receive_msg(monitor_channel *ch, void *buf, Size buf_size, Size *out_len)
 {
     ShmMqChannelLocal *local;
@@ -222,14 +228,14 @@ shm_mq_channel_receive_msg(monitor_channel *ch, void *buf, Size buf_size, Size *
     return CHANNEL_RECV_OK;
 }
 
-static void
+void
 shm_mq_channel_cleanup(monitor_channel *ch)
 {
-	ShmMqChannelData *priv = (ShmMqChannelData *)ch->private_data;
+	// ShmMqChannelData *priv = (ShmMqChannelData *)ch->private_data;
 
-	if (priv->mq_handle)
-		shm_mq_detach(priv->mq_handle);
+	// if (priv->mq_handle)
+	// 	shm_mq_detach(priv->mq_handle);
 
-	pfree(priv);
-	ch->private_data = NULL;
+	// pfree(priv);
+	// ch->private_data = NULL;
 }

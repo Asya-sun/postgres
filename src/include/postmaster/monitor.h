@@ -157,6 +157,8 @@ typedef struct PublisherInfo
 	/* мб еще лочку надо добавить */
 	pid_t proc_pid;
 	monitor_channel *channel;
+	
+	slock_t mutex;
 } PublisherInfo;
 
 typedef struct MssState_SubscriberInfo
