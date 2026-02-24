@@ -282,7 +282,7 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
 }
 
 
-MSS_SUBSCRIBE_RESULT pg_monitor_subscribe_to_event(const char *event_string, routing_type _routing_type)
+MonitorResult pg_monitor_subscribe_to_event(const char *event_string, routing_type _routing_type)
 {
     MonSubSystem_LocalState *local = &monSubSysLocal;
     MssState_SubjectEntitiesInfo *entitiesInfo;
@@ -426,6 +426,63 @@ mss_alloc_subject_id(void)
 }
 
 
+// в случае, если не удалось уведомить о событии, быстро возврщает управление
+/*
+ * 
+ * 
+ */
+MonitorResult pg_monitor_notify(const char *event_string, bool reliable)
+{
+    monitor_channel *ch;
+    ChannelOpResult send_result;
+    bool nowait = !reliable;
+
+    if (monSubSysLocal.myPubInfo == NULL)
+    {
+        elog(LOG_LEVEL, "Publisher not registered");
+        return MSS_ERR_NOT_REGISTERED;
+    }
+
+    ch = monSubSysLocal.myPubInfo->channel;
+
+    /* 
+     * TODO:
+     * figure out what the status of the channel is and what to return
+     * 
+     * Currently - MSS_CHANNEL_WRONG_STATE
+     */
+    if (ch == NULL || ch->state != CH_ACTIVE)
+    {
+        elog(LOG_LEVEL, "Publisher channel not active");
+        return -1;
+    }
+
+    send_result = ch->ops->send_msg(ch,
+                           event_string,
+                           strlen(event_string) + 1,
+                           nowait);
+
+    switch (send_result)
+    {
+        case CH_OK:
+            return MSS_OK;
+
+        case CH_SEND_WOULD_BLOCK:
+            /* it makes no sense if it's supposed to be reliable notify */
+            Assert(!reliable);
+            return MSS_CHANNEL_BUSY;
+
+        case CH_SEND_DETACHED:
+            return MSS_DETACHED;
+
+        case CH_INVALID_ARG: 
+            return MSS_ERR_INVALID_ARG;
 
 
+        case CH_UNEXPECTED_ERROR:
+        default:
+            elog(LOG_LEVEL, "\n%dpg_monitor_reliable_notify: strange error code returned", __LINE__);
+            return CH_UNEXPECTED_ERROR;
+    }
+}
 

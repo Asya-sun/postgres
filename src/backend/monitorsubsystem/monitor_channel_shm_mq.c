@@ -155,8 +155,8 @@ shm_mq_channel_attach(monitor_channel *ch)
  * TODO:
  * mind all checks
  */
-bool
-shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len)
+ChannelOpResult
+shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len, bool nowait)
 {
     ShmMqChannelLocal *local;
 	shm_mq_result result;
@@ -171,8 +171,8 @@ shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len)
     result = shm_mq_send(local->handle,
                          len,
                          data,
-                         false,  /* nowait = false (block) */
-                         false); /* force_flush */
+                         nowait,
+                         true); /* force_flush */
 
 	switch (result)
 	{
@@ -180,11 +180,13 @@ shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len)
         SpinLockAcquire(&ch->mutex);
         ch->is_there_msgs = true;
         SpinLockRelease(&ch->mutex);
-		return true;
+		return CH_OK;
 		break;
 	case SHM_MQ_DETACHED:
+        return CH_SEND_DETACHED;
+		break;
 	case SHM_MQ_WOULD_BLOCK:
-		return false;
+		return CH_SEND_WOULD_BLOCK;
 		break;
 	
 	default:
@@ -199,7 +201,7 @@ shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len)
  * TODO:
  * mind all checks
  */
-ChannelRecvResult
+ChannelOpResult
 shm_mq_channel_receive_msg(monitor_channel *ch, void *buf, Size buf_size, Size *out_len)
 {
     ShmMqChannelLocal *local;
@@ -219,10 +221,10 @@ shm_mq_channel_receive_msg(monitor_channel *ch, void *buf, Size buf_size, Size *
                             true);   /* nowait */
 
     if (result == SHM_MQ_WOULD_BLOCK)
-        return CHANNEL_RECV_EMPTY;
+        return CH_RECV_EMPTY;
 
     if (result == SHM_MQ_DETACHED)
-        return CHANNEL_RECV_CLOSED;
+        return CH_RECV_CLOSED;
 
     if (result != SHM_MQ_SUCCESS)
         elog(ERROR, "unexpected shm_mq_receive result");
@@ -235,7 +237,7 @@ shm_mq_channel_receive_msg(monitor_channel *ch, void *buf, Size buf_size, Size *
     if (out_len)
         *out_len = len;
 
-    return CHANNEL_RECV_OK;
+    return CH_OK;
 }
 
 void

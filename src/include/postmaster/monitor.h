@@ -42,11 +42,6 @@
  * to avoid hard limits.
  */
 
-/* #define MSS_MAX_PROCESSES                 \
- 	(MaxBackends + max_worker_processes + \
-	 autovacuum_max_workers + max_parallel_workers + 1)
-*/
-
 // guc pgc postmaster
 #define MAX_BACKENDS_LIMIT 256
 #define MAX_WORKER_PROCESSES_LIMIT 64
@@ -56,7 +51,8 @@
 #define MSS_MAX_PROCESSES (MAX_BACKENDS_LIMIT + MAX_WORKER_PROCESSES_LIMIT + \
 						   AUTOVACUUM_MAX_WORKERS_LIMIT + MAX_PARALLEL_WORKERS_LIMIT + 1)
 
-#define MAX_SUBS_NUM MSS_MAX_PROCESSES
+// #define MAX_SUBS_NUM MSS_MAX_PROCESSES
+#define MAX_SUBS_NUM 32
 #define MAX_PUBS_NUM 32
 #define MAX_MONITOR_CHANNELS_NUM (MAX_PUBS_NUM + MAX_SUBS_NUM)
 #define MAX_SUBJECT_NUM 64

@@ -111,8 +111,11 @@ Size mss_monitorChannelData_size(void)
 	 * lines 338-360
 	 */
 	shm_toc_initialize_estimator(&e);
-	shm_toc_estimate_chunk(&e, MAX_MONITOR_CHANNEL_DATA_SIZE);
-
+	
+	for (int i = 0; i < MAX_MONITOR_CHANNELS_NUM; i++) 
+	{
+    	shm_toc_estimate_chunk(&e, MAX_MONITOR_CHANNEL_DATA_SIZE);
+	}
 	/* It's too much, but let it be for some time */
 	shm_toc_estimate_keys(&e, MAX_MONITOR_CHANNELS_NUM);
 
@@ -155,6 +158,8 @@ void MonitorShmemInit(void)
 	(mssSharedState *) ShmemInitStruct("Monitoring Subsystem Data",
 						MonitorShmemSize(),
 						&found);
+
+	elog(LOG, "\nMONITOR.C 	ChannelData_size = %zu", mss_monitorChannelData_size());
 	elog(LOG, "\nMONITOR.C 	MonitorShmemSize = %zu", MonitorShmemSize());
 
 	if (!found)
@@ -597,9 +602,13 @@ deliver_message_to_subscribers(MonitorMsg *msg)
 
             if (sub->channel != NULL)
             {
+				/* 
+				 * Temporary 
+				 * ??? nowait or what??? 
+				 */
                 sub->channel->ops->send_msg(sub->channel,
                                         msg,
-                                        sizeof(MonitorMsg));
+                                        sizeof(MonitorMsg), false);
             }
         }
     }

@@ -25,7 +25,7 @@ typedef struct MonitorChannelConfig MonitorChannelConfig;
 /*
  * тк сейчас используем чисто shm_mq, но в будущем могут быть добавлены
  * и другие реализации, то имеет смысл сейчас (даже на всякий случай)
- * создать интерфейс для канала и, если что, добавлять реализации
+ * создать интерфейс для канала и добавлять реализации
  * по мере нужды
  *
  */
@@ -39,13 +39,28 @@ typedef enum
 /* 
  * QUESTION:
  * does it make any sense? 
+ * 
+ * TODO:
+ * think about checking the status of the channel recipient 
+ * separately and the status of the channel itself separately
  */
 typedef enum
 {
-    CHANNEL_RECV_OK,
-    CHANNEL_RECV_EMPTY,
-    CHANNEL_RECV_CLOSED
-} ChannelRecvResult;
+    CH_OK,
+    
+    /* Receive error codes */
+    CH_RECV_EMPTY,
+    CH_RECV_CLOSED,
+    
+    /* Send error codes */
+    CH_SEND_WOULD_BLOCK,
+    CH_SEND_DETACHED,
+    // CH_SEND_NOT_READY,
+
+    /* Common error codes */
+    CH_UNEXPECTED_ERROR,
+    CH_INVALID_ARG,
+} ChannelOpResult;
 
 typedef enum
 {
@@ -71,8 +86,8 @@ typedef struct ChannelOps
      * 
      */
 	bool (*init)(monitor_channel *ch, MonitorChannelConfig *arg);
-	bool (*send_msg)(monitor_channel *ch, const void *data, Size len);
-	ChannelRecvResult (*receive_one_msg)(monitor_channel *ch, void *buf, Size buf_size, Size *out_len);
+	ChannelOpResult (*send_msg)(monitor_channel *ch, const void *data, Size len, bool nowait);
+	ChannelOpResult (*receive_one_msg)(monitor_channel *ch, void *buf, Size buf_size, Size *out_len);
 	void (*cleanup)(monitor_channel *ch);
 	void *(*attach)(monitor_channel *ch);
     void (*detach)(monitor_channel *ch, void *local);

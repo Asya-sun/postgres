@@ -37,9 +37,9 @@ typedef struct ShmMqChannelLocal
 
 bool shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *arg);
 
-bool shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len);
+ChannelOpResult shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len, bool nowait);
 
-ChannelRecvResult shm_mq_channel_receive_msg(monitor_channel *ch, void *buf, Size buf_size, Size *out_len);
+ChannelOpResult shm_mq_channel_receive_msg(monitor_channel *ch, void *buf, Size buf_size, Size *out_len);
 
 void shm_mq_channel_cleanup(monitor_channel *ch);
 
