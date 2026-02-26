@@ -95,7 +95,7 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
 	 * Check if monitor_proc_no is valid
 	 */
 	elog(LOG_LEVEL, "\npg_monitor_con_connect.c line: %d\n  monitor_proc_no %d", __LINE__, monitor_proc_no);
-    
+
     LWLockRelease(&monSubSysLocal.MonSubSystem_SharedState->lock);
 
     LWLockAcquire(&sharedSubInfo->lock, LW_EXCLUSIVE);
@@ -142,6 +142,9 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
     myChannel = &monSubSysLocal.MonSubSystem_SharedState->channels[sub_id + MAX_PUBS_NUM];
 
     conConfig->channel_id = sub_id + MAX_PUBS_NUM;
+    conConfig->subscriber_procno = MyProcNumber;
+    conConfig->publisher_procno = monitor_proc_no;
+
     elog(LOG_LEVEL, "\npg_monitor_con_connect.c line: %d\n  conConfig->channel_id %d", __LINE__, conConfig->channel_id);
     
     is_channel_created = monitor_channel_options[conConfig->type]->init(myChannel, conConfig);
@@ -152,9 +155,6 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
         elog(LOG_LEVEL, "Couldn't create a channel");
         return -1 ;
     }
-
-    myChannel->subscriber_procno = MyProcNumber;
-    myChannel->publisher_procno = monitor_proc_no;
 
     /*
      * maybe it'd be easier just not to release lock 
@@ -195,6 +195,7 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
     monitor_channel *myChannel;
     MssState_PublisherInfo *sharedPubInfo = &monSubSysLocal.MonSubSystem_SharedState->pub;
     bool is_channel_created;
+    ChannelOpResult attach_res;
 
     MonitorEnsureContext();
     
@@ -254,6 +255,7 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
     conConfig->channel_id = pub_id;
     conConfig->publisher_procno = MyProcNumber;
     conConfig->subscriber_procno = monitor_proc_no;
+    elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  publisher_procno %d\nsubscriber_procno %d\n", __LINE__, conConfig->publisher_procno, conConfig->subscriber_procno);
     
     is_channel_created = monitor_channel_options[conConfig->type]->init(myChannel, conConfig);
     elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  is_channel_created %d", __LINE__, is_channel_created);
@@ -263,6 +265,29 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
         elog(DEBUG1, "Couldn't create a channel");
         return -1 ;
     }
+
+    attach_res = monitor_channel_options[conConfig->type]->attach(myChannel);
+    elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  ATTACH_RES_RESULT %d", __LINE__, attach_res);
+    
+    if (attach_res != CH_OK)
+    {
+        LWLockRelease(&sharedPubInfo->lock);
+        /*
+         * TODO:
+         * clear memory in case of channel can't be attached...
+         * or mind a problem
+         */
+        return -1 ;
+    }
+    else
+    {
+        /*
+         * TODO:
+         * think about placing it somewhere else...
+         */
+        SetLatch(&ProcGlobal->allProcs[monitor_proc_no].procLatch);
+    }
+    elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n", __LINE__);
 
     /*
      * maybe it'd be easier just not to release lock 
@@ -454,7 +479,7 @@ MonitorResult pg_monitor_notify(const char *event_string, bool reliable)
     if (ch == NULL || ch->state != CH_ACTIVE)
     {
         elog(LOG_LEVEL, "Publisher channel not active");
-        return -1;
+        return MSS_CHANNEL_WRONG_STATE;
     }
 
     send_result = ch->ops->send_msg(ch,

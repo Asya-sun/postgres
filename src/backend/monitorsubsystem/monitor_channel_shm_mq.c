@@ -25,7 +25,8 @@ const ChannelOps ShmMqChannelOps = {
 	.init = shm_mq_channel_init,
 	.send_msg = shm_mq_channel_send_msg,
 	.receive_one_msg = shm_mq_channel_receive_msg,
-	.cleanup = shm_mq_channel_cleanup
+	.cleanup = shm_mq_channel_cleanup,
+    .attach = shm_mq_channel_attach
 };
 
 bool
@@ -53,9 +54,8 @@ bool
  * строка 147 - пример как создавать shm_mq с помощью
  * toc и shm_toc_insert в DSM
  * 
- * TODO:
- * add about here or in shm_mq_channel_attach
- * initializing shm_mq_set_receiver and shm_mq_set_sender
+ * TODO: 
+ * mind all checks
  */
 shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
 {
@@ -64,6 +64,19 @@ shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
 	ShmMqChannelData *data;
 	void *mq_space;
     elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n  toc %p", __LINE__, toc);
+
+    /* CHECKS */
+    if (cfg->publisher_procno < 0 || cfg->publisher_procno >= ProcGlobal->allProcCount) 
+    {
+        elog(LOG_LEVEL, "\nshm_mq_channel_init \nINVALID publisher procno: %d", ch->publisher_procno);
+        return CH_INVALID_ARG;
+    }
+
+    if (cfg->subscriber_procno < 0 || cfg->subscriber_procno >= ProcGlobal->allProcCount) 
+    {
+        elog(LOG_LEVEL, "\nshm_mq_channel_init \nINVALID subscriber procno: %d", ch->subscriber_procno);
+        return CH_INVALID_ARG;
+    }
 
 	data = shm_toc_allocate(toc, sz);
     elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n  data %p", __LINE__, data);
@@ -82,6 +95,11 @@ shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
 
     ch->publisher_procno = cfg->publisher_procno;
     ch->subscriber_procno = cfg->subscriber_procno;
+    
+    elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n  publisher_procno %d\nsubscriber_procno %d\n", __LINE__, ch->publisher_procno, ch->subscriber_procno);
+
+    shm_mq_set_sender(data->mq, &ProcGlobal->allProcs[ch->publisher_procno]);
+    shm_mq_set_receiver(data->mq, &ProcGlobal->allProcs[ch->subscriber_procno]);
 
     SpinLockRelease(&ch->mutex);
 	return true;
@@ -91,7 +109,7 @@ shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
  * TODO:
  * think about MemoryContext for operations with channels
  */
-void
+ChannelOpResult
 shm_mq_channel_attach(monitor_channel *ch)
 {
     MemoryContext oldcontext;
@@ -108,6 +126,29 @@ shm_mq_channel_attach(monitor_channel *ch)
     }
     oldcontext = MemoryContextSwitchTo(monSubSysLocal.ctx);
 
+    elog(LOG_LEVEL, "\nshm_mq_channel_attach line: %d\n", __LINE__);
+
+    // ???
+    /* CHECKS */
+    if (ch->publisher_procno < 0 || ch->publisher_procno >= ProcGlobal->allProcCount) 
+    {
+        elog(LOG_LEVEL, "\nshm_mq_channel_attach \nINVALID publisher procno: %d", ch->publisher_procno);
+        return CH_INVALID_ARG;
+    } 
+    else 
+    {
+        elog(LOG_LEVEL, "\nshm_mq_channel_attach \nCorrect publisher procno: %d", ch->publisher_procno);  
+    }
+
+    if (ch->subscriber_procno < 0 || ch->subscriber_procno >= ProcGlobal->allProcCount) 
+    {
+        elog(LOG_LEVEL, "\nshm_mq_channel_attach \nINVALID subscriber procno: %d", ch->subscriber_procno);
+        return CH_INVALID_ARG;
+    } 
+    else 
+    {
+        elog(LOG_LEVEL, "\nshm_mq_channel_attach \nCorrect subscriber procno: %d", ch->subscriber_procno); 
+    }
 
 	/* Here shold be smth with MemoryContext */
     local = palloc0(sizeof(ShmMqChannelLocal));
@@ -116,12 +157,14 @@ shm_mq_channel_attach(monitor_channel *ch)
     SpinLockAcquire(&ch->mutex);
     if (AmMonitorSubsystemProcess()) {
         int channel_id;
+        elog(LOG_LEVEL, "\nshm_mq_channel_attach MONITOR PROCESS line: %d\n", __LINE__);
         Assert(ch >= &shared_channels[0] && ch <  &shared_channels[MAX_MONITOR_CHANNELS_NUM - 1]);
         
         channel_id = ch- shared_channels; 
         monSubSysLocal.monitorLocal.channelsLocalData[channel_id] = local;
         ch->attach_flags |= CH_ATTACH_MONITOR;
     } else {
+        elog(LOG_LEVEL, "\nshm_mq_channel_attach CLIENT PROCESS line: %d\n", __LINE__);
         if (MyProcNumber == ch->subscriber_procno) {
             monSubSysLocal.subLocalData = local;
         }
@@ -131,24 +174,16 @@ shm_mq_channel_attach(monitor_channel *ch)
         ch->attach_flags |= CH_ATTACH_CLIENT;
     }
 
-    if (!shm_mq_get_sender(data->mq))
-    {
-        shm_mq_set_sender(data->mq, &ProcGlobal->allProcs[ch->publisher_procno]);
-    }
-
-    if (!shm_mq_get_receiver(data->mq))
-    {
-        shm_mq_set_receiver(data->mq, &ProcGlobal->allProcs[ch->subscriber_procno]);
-    }
     if (channel_is_ready(ch->attach_flags))
-    if (ch->attach_flags == CH_ATTACH_ACTIVE)
     {
+        elog(LOG_LEVEL, "\nshm_mq_channel_attach line: %d\n CHANNEL IS READY\n", __LINE__);
         ch->state = CH_ACTIVE;
     }
     SpinLockRelease(&ch->mutex);
 
     MemoryContextSwitchTo(oldcontext);
-	return;   
+    elog(LOG_LEVEL, "\nshm_mq_channel_attach line: %d\n", __LINE__);
+	return CH_OK;   
 }
 
 /*

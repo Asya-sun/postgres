@@ -89,7 +89,7 @@ typedef struct ChannelOps
 	ChannelOpResult (*send_msg)(monitor_channel *ch, const void *data, Size len, bool nowait);
 	ChannelOpResult (*receive_one_msg)(monitor_channel *ch, void *buf, Size buf_size, Size *out_len);
 	void (*cleanup)(monitor_channel *ch);
-	void *(*attach)(monitor_channel *ch);
+	ChannelOpResult (*attach)(monitor_channel *ch);
     void (*detach)(monitor_channel *ch, void *local);
 
 } ChannelOps;

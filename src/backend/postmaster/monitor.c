@@ -413,8 +413,11 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 	for (;;)
 	{
 		int ch_count = 0;
+		int cnt = 0;
 		int rc;
 		bool setqueues[MAX_MONITOR_CHANNELS_NUM];
+		elog(LOG, "\nMONITOR_PROCESS_ %d\n",  cnt);
+		cnt++;
 		// elog(LOG, "the most beatiful cycle ever!!!");
 		// /* 3 sec */
 		// pg_usleep(1000L * 1000L * 3L);
@@ -436,11 +439,13 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 		ResetLatch(MyLatch);
 		
 		if (rc & WL_EXIT_ON_PM_DEATH) {
+			elog(LOG, "\nMONITOR_PROCESS_ POSTMASTER DEAD\n");
 			proc_exit(1);
 		}
 
 		if (rc & WL_TIMEOUT)
 		{
+			elog(LOG, "\nMONITOR_PROCESS_ LATCH TIMEOUT\n");
 			last_processed_queue = MAX_MONITOR_CHANNELS_NUM;
 			deliver_from_oqtd(&oqtd, current_pn, last_processed_queue);
 			current_pn++;
@@ -468,10 +473,14 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 					!(ch->attach_flags & CH_ATTACH_MONITOR);
 			SpinLockRelease(&ch->mutex);
 
+			if (q == 0)
+			{
+				elog(LOG, "\nMONITOR_PROCESS_ channel[0] %d need attach\n", need_attach);
+			}
 			if (need_attach) 
 			{
+				elog(LOG, "\nMONITOR_PROCESS_ New channel %d need attach\n", q);
 				ch->ops->attach(ch);
-
 			}
 		}
 
@@ -481,6 +490,7 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 			monitor_channel *ch = &channels[q];
 			SpinLockAcquire(&ch->mutex);
 			if (ch->is_there_msgs) {
+				elog(LOG, "\nMONITOR_PROCESS_ channel %d GOT MSGS\n", q);
 				setqueues[q] = true;
 				ch_count++;
 			}
