@@ -19,6 +19,7 @@
 #include "storage/proc.h"
 #include "storage/procnumber.h"
 #include "utils/memutils.h"
+#include "utils/timestamp.h"
 
 #define BIT_WORD(idx) ((idx) / 64)
 #define BIT_MASK(idx) (1ULL << ((idx) % 64))
@@ -205,7 +206,6 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
 	 * TODO:
 	 * Check if monitor_proc_no is valid
 	 */
-    elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  monitor_proc_no %d", __LINE__, monitor_proc_no);
     
     LWLockRelease(&monSubSysLocal.MonSubSystem_SharedState->lock);
     
@@ -237,7 +237,6 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
         }
         SpinLockRelease(&pub->mutex);
     }
-    elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  pub_id %d", __LINE__, pub_id);
     
     if (pub_id == -1)
     {
@@ -255,7 +254,7 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
     conConfig->channel_id = pub_id;
     conConfig->publisher_procno = MyProcNumber;
     conConfig->subscriber_procno = monitor_proc_no;
-    elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  publisher_procno %d\nsubscriber_procno %d\n", __LINE__, conConfig->publisher_procno, conConfig->subscriber_procno);
+    elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  publisher_procno %d\nsubscriber_procno %d\npub_id %d\nmonitor_proc_no %d\n", __LINE__, conConfig->publisher_procno, conConfig->subscriber_procno, pub_id, monitor_proc_no);
     
     is_channel_created = monitor_channel_options[conConfig->type]->init(myChannel, conConfig);
     elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n  is_channel_created %d", __LINE__, is_channel_created);
@@ -278,14 +277,6 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
          * or mind a problem
          */
         return -1 ;
-    }
-    else
-    {
-        /*
-         * TODO:
-         * think about placing it somewhere else...
-         */
-        SetLatch(&ProcGlobal->allProcs[monitor_proc_no].procLatch);
     }
     elog(LOG_LEVEL, "\npg_monitor_pub_connect.c line: %d\n", __LINE__);
 
@@ -450,17 +441,31 @@ mss_alloc_subject_id(void)
     return -1;
 }
 
-
 // в случае, если не удалось уведомить о событии, быстро возврщает управление
 /*
  * 
  * 
  */
-MonitorResult pg_monitor_notify(const char *event_string, bool reliable)
+MonitorResult pg_monitor_notify(const char *event_name, const void *data, bool reliable)
 {
     monitor_channel *ch;
     ChannelOpResult send_result;
     bool nowait = !reliable;
+    MonitorMsg msg;
+    Size name_len = strlen(event_name);
+    Size data_len = strlen(data);
+    
+    elog(LOG_LEVEL, "\npg_monitor_notify\nevent_name = %s\nevent_len = %ld\ndata=%s\ndata_len=%ld\n", event_name, name_len, (char *)data, data_len);
+
+    if (name_len > MAX_SUBJECT_LEN || data_len > MAX_MONITOR_MESSAGE_LEN)
+    {
+        return MSS_ERR_INVALID_ARG;
+    }
+
+    memset(&msg, 0, sizeof(MonitorMsg));
+    memcpy(msg.key.name, event_name, name_len);
+    msg.ts = GetCurrentTimestamp();
+    memcpy(msg.data, data, data_len);
 
     if (monSubSysLocal.myPubInfo == NULL)
     {
@@ -483,8 +488,8 @@ MonitorResult pg_monitor_notify(const char *event_string, bool reliable)
     }
 
     send_result = ch->ops->send_msg(ch,
-                           event_string,
-                           strlen(event_string) + 1,
+                           (void*) &msg,
+                           sizeof(msg),
                            nowait);
 
     switch (send_result)

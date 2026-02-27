@@ -32,6 +32,7 @@ const ChannelOps ShmMqChannelOps = {
 bool
 /*
  * Initialization of shm_mq_channel
+ * Set Latch of another-side user of channel
  * return true on success, else false 
  * 
  * Есть shm_mq_handle - это backend-local структура для уже 
@@ -56,6 +57,8 @@ bool
  * 
  * TODO: 
  * mind all checks
+ * think about if the calling process can be neither a publisher 
+ * nor a subscriber?
  */
 shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
 {
@@ -63,7 +66,10 @@ shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
 	Size sz = cfg->u.shm_mq.mq_size + sizeof(ShmMqChannelData) + sizeof(ShmMqChannelLocal);
 	ShmMqChannelData *data;
 	void *mq_space;
-    elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n  toc %p", __LINE__, toc);
+
+    int myProcNo = MyProcNumber;
+    int otherProcNo;
+    
 
     /* CHECKS */
     if (cfg->publisher_procno < 0 || cfg->publisher_procno >= ProcGlobal->allProcCount) 
@@ -78,30 +84,27 @@ shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
         return CH_INVALID_ARG;
     }
 
+    otherProcNo = cfg->publisher_procno == MyProcNumber ? cfg->subscriber_procno : cfg->publisher_procno;
+
 	data = shm_toc_allocate(toc, sz);
-    elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n  data %p", __LINE__, data);
 	mq_space = (void *)((char *)data + sizeof(ShmMqChannelData) + sizeof(ShmMqChannelLocal));
 
 	data->mq = shm_mq_create(mq_space, cfg->u.shm_mq.mq_size);
+    
+    shm_toc_insert(toc, cfg->channel_id, data);
 
-    elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n  data->mq %p", __LINE__, data->mq);
     SpinLockAcquire(&ch->mutex);
-    elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n", __LINE__);
 	ch->private_data = data;
 	ch->ops = &ShmMqChannelOps;
-
-	shm_toc_insert(toc, cfg->channel_id, data);
     ch->state = CH_CREATED;
-
     ch->publisher_procno = cfg->publisher_procno;
     ch->subscriber_procno = cfg->subscriber_procno;
-    
-    elog(LOG_LEVEL, "\nshm_mq_channel_init line: %d\n  publisher_procno %d\nsubscriber_procno %d\n", __LINE__, ch->publisher_procno, ch->subscriber_procno);
-
+    /* Should it be set out of spinlock?? */
     shm_mq_set_sender(data->mq, &ProcGlobal->allProcs[ch->publisher_procno]);
     shm_mq_set_receiver(data->mq, &ProcGlobal->allProcs[ch->subscriber_procno]);
-
     SpinLockRelease(&ch->mutex);
+
+    SetLatch(&ProcGlobal->allProcs[otherProcNo].procLatch);
 	return true;
 }
 
@@ -126,17 +129,13 @@ shm_mq_channel_attach(monitor_channel *ch)
     }
     oldcontext = MemoryContextSwitchTo(monSubSysLocal.ctx);
 
-    elog(LOG_LEVEL, "\nshm_mq_channel_attach line: %d\n", __LINE__);
-
     // ???
     /* CHECKS */
     if (ch->publisher_procno < 0 || ch->publisher_procno >= ProcGlobal->allProcCount) 
     {
         elog(LOG_LEVEL, "\nshm_mq_channel_attach \nINVALID publisher procno: %d", ch->publisher_procno);
         return CH_INVALID_ARG;
-    } 
-    else 
-    {
+    } else {
         elog(LOG_LEVEL, "\nshm_mq_channel_attach \nCorrect publisher procno: %d", ch->publisher_procno);  
     }
 
@@ -144,9 +143,7 @@ shm_mq_channel_attach(monitor_channel *ch)
     {
         elog(LOG_LEVEL, "\nshm_mq_channel_attach \nINVALID subscriber procno: %d", ch->subscriber_procno);
         return CH_INVALID_ARG;
-    } 
-    else 
-    {
+    } else {
         elog(LOG_LEVEL, "\nshm_mq_channel_attach \nCorrect subscriber procno: %d", ch->subscriber_procno); 
     }
 
@@ -155,7 +152,8 @@ shm_mq_channel_attach(monitor_channel *ch)
     local->handle = shm_mq_attach(data->mq, NULL, NULL);
 
     SpinLockAcquire(&ch->mutex);
-    if (AmMonitorSubsystemProcess()) {
+    if (AmMonitorSubsystemProcess()) 
+    {
         int channel_id;
         elog(LOG_LEVEL, "\nshm_mq_channel_attach MONITOR PROCESS line: %d\n", __LINE__);
         Assert(ch >= &shared_channels[0] && ch <  &shared_channels[MAX_MONITOR_CHANNELS_NUM - 1]);
@@ -182,7 +180,6 @@ shm_mq_channel_attach(monitor_channel *ch)
     SpinLockRelease(&ch->mutex);
 
     MemoryContextSwitchTo(oldcontext);
-    elog(LOG_LEVEL, "\nshm_mq_channel_attach line: %d\n", __LINE__);
 	return CH_OK;   
 }
 
@@ -244,11 +241,22 @@ shm_mq_channel_receive_msg(monitor_channel *ch, void *buf, Size buf_size, Size *
     Size len;
     void *data;
 
-    /* Берём локальный handle */
-    local = (ShmMqChannelLocal *)
+    if (AmMonitorSubsystemProcess())
+    {
+        int channel_id;
+        monitor_channel *shared_channels = monSubSysLocal.MonSubSystem_SharedState->channels;
+        
+        elog(LOG_LEVEL, "\nshm_mq_channel_receive_msg MONITOR PROCESS line: %d\n", __LINE__);
+        Assert(ch >= &shared_channels[0] && ch <  &shared_channels[MAX_MONITOR_CHANNELS_NUM - 1]);
+        
+        channel_id = ch- shared_channels; 
+        local = monSubSysLocal.monitorLocal.channelsLocalData[channel_id];
+    } else {
+        /* Берём локальный handle */
+        local = (ShmMqChannelLocal *)
         monSubSysLocal.subLocalData;
-
-    Assert(local && local->handle);
+        Assert(local && local->handle);
+    }
 
     result = shm_mq_receive(local->handle,
                             &len,

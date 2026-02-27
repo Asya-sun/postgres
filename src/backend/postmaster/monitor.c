@@ -41,6 +41,8 @@
 #include "monitorsubsystem/monitor_event.h"
 #include "utils/memutils.h"
 
+#define LOG_LEVEL LOG
+
 // mssSharedState *MonSubSystem_SharedState = NULL;
 
 MonSubSystem_LocalState  monSubSysLocal;
@@ -473,10 +475,6 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 					!(ch->attach_flags & CH_ATTACH_MONITOR);
 			SpinLockRelease(&ch->mutex);
 
-			if (q == 0)
-			{
-				elog(LOG, "\nMONITOR_PROCESS_ channel[0] %d need attach\n", need_attach);
-			}
 			if (need_attach) 
 			{
 				elog(LOG, "\nMONITOR_PROCESS_ New channel %d need attach\n", q);
@@ -506,7 +504,8 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 				last_processed_queue = q;
 
 				if (setqueues[q]) 
-				{
+				{	
+        			elog(LOG_LEVEL, "MONITOR_PROCESS line %d", __LINE__);
 					read_msgs_from_channel(q, &oqtd, current_pn);
 				}
 
@@ -529,6 +528,7 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 static bool
 can_deliver(OqtdItem *item, int current_pn, int last_processed_queue)
 {
+    elog(LOG_LEVEL, "MONITOR_PROCESS line %d", __LINE__);
     return (item->pn < current_pn &&
             last_processed_queue >= item->rqn);
 }
@@ -541,17 +541,25 @@ read_msgs_from_channel(int qid, List **oqtd, int current_pn)
 
     MonitorMsg buf;
     Size out_len;
+	ChannelOpResult res;
 
-    while (ch->ops->receive_one_msg(ch, &buf, sizeof(MonitorMsg), &out_len))
+    while ((res = ch->ops->receive_one_msg(ch, &buf, sizeof(MonitorMsg), &out_len)) == CH_OK)
     {
         OqtdItem *item = palloc(sizeof(OqtdItem));
 
         memcpy(&item->msg, &buf, sizeof(MonitorMsg));
+		elog(LOG_LEVEL, "\nMONITOR_PROCESS line %d\nread_msgs_from_channel msg\nout_len = %ld\ndata = %s\nlen = %ld\nkey = %s\nts = %ld\n", __LINE__, out_len, buf.data, buf.len, buf.key.name, buf.ts);
         item->pn  = current_pn;
         item->rqn = qid;
 
         oqtd_insert_sorted(oqtd, item);
     }
+	/*
+	 * TODO:
+	 * need check res (CH_RECV_CLOSED / CH_RECV_EMPTY)
+	 * CH_RECV_EMPTY - Ok
+	 * CH_RECV_CLOSED -- ??? 
+	 */
 	SpinLockAcquire(&ch->mutex);
 	ch->is_there_msgs = false;
 	SpinLockRelease(&ch->mutex);
@@ -636,6 +644,7 @@ oqtd_insert_sorted(List **oqtd, OqtdItem *new_item)
 {
     ListCell *lc;
     int pos = 0;
+    elog(LOG_LEVEL, "MONITOR_PROCESS line %d", __LINE__);
 
     /* If the list is empty, then just add the item */
     if (*oqtd == NIL)
@@ -650,6 +659,7 @@ oqtd_insert_sorted(List **oqtd, OqtdItem *new_item)
 
         if (new_item->msg.ts < existing->msg.ts)
         {
+    		elog(LOG_LEVEL, "MONITOR_PROCESS line %d", __LINE__);
 			*oqtd = list_insert_nth(*oqtd, pos, new_item);
             return;
         }

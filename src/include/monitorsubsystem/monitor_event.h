@@ -44,6 +44,5 @@ void pg_monitor_unsubscribe_from_event(const char *event_string);
 int pg_monitor_pub_connect(MonitorChannelConfig *conConfig);
 void pg_monitor_pub_disconnect();
 
-MonitorResult pg_monitor_notify(const char *event_string, bool reliable);
-
+MonitorResult pg_monitor_notify(const char *event_name, const void *data, bool reliable);
 #endif /* MONITOR_EVENT_H */
