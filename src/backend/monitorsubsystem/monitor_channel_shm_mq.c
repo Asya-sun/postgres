@@ -67,7 +67,6 @@ shm_mq_channel_init(monitor_channel *ch, MonitorChannelConfig *cfg)
 	ShmMqChannelData *data;
 	void *mq_space;
 
-    int myProcNo = MyProcNumber;
     int otherProcNo;
     
 

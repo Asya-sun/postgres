@@ -42,6 +42,7 @@
 #include "utils/memutils.h"
 
 #define LOG_LEVEL LOG
+#define SHOULD_CREATE_NEW_ENTRY_IN_HASH true
 
 // mssSharedState *MonSubSystem_SharedState = NULL;
 
@@ -64,6 +65,7 @@ static void oqtd_insert_sorted(List **oqtd, OqtdItem *new_item);
 static void read_msgs_from_channel(int qid, List **oqtd, int current_pn);
 static void deliver_from_oqtd(List **oqtd, int current_pn, int last_processed_queue);
 static void deliver_message_to_subscribers(MonitorMsg *msg);
+static mssEntry* find_or_create_subject_entry(const char *key, bool create_new);
 
 Size mss_subscriberInfo_size(void)
 {
@@ -229,12 +231,14 @@ void MonitorShmemInit(void)
 		{
 			SubjectEntity *subj = &monSubSysLocal.MonSubSystem_SharedState->entitiesInfo.subjectEntities[i];
 
+			subj->used = false;
 			subj->_routingType = ANYCAST;
 
 			for (int j = 0; j < MAX_SUBS_BIT_NUM; j++)
 			{
 				pg_atomic_init_u64(&subj->bitmap_subs[j], 0);
 			}
+			SpinLockInit(&subj->mutex);
 		}
 
 		/* Channels initialization */
@@ -528,7 +532,7 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 static bool
 can_deliver(OqtdItem *item, int current_pn, int last_processed_queue)
 {
-    elog(LOG_LEVEL, "MONITOR_PROCESS line %d", __LINE__);
+    elog(LOG_LEVEL, "\nMONITOR_PROCESS line %d", __LINE__);
     return (item->pn < current_pn &&
             last_processed_queue >= item->rqn);
 }
@@ -586,6 +590,10 @@ deliver_from_oqtd(List **oqtd,
     }
 }
 
+/*
+ * Helper function for delivering msgs to subscribers
+ *
+ */
 static void
 deliver_message_to_subscribers(MonitorMsg *msg)
 {
@@ -595,15 +603,18 @@ deliver_message_to_subscribers(MonitorMsg *msg)
     bool found;
     mssEntry *entry;
 	SubjectEntity *entity;
+	HASHACTION hash_action = SHOULD_CREATE_NEW_ENTRY_IN_HASH ? HASH_ENTER_NULL : HASH_FIND;
 
-    entry = hash_search(state->mss_hash,
-                        &msg->key,
-                        HASH_FIND,
-                        &found);
+	entry = find_or_create_subject_entry(&msg->key.name, SHOULD_CREATE_NEW_ENTRY_IN_HASH);
 
-    if (!found)
-        return;
+	if (entry == NULL)
+	{
+		elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nkey = %s\nno such entry\n", __LINE__, msg->key.name);
+		return;
+	}
 
+
+	elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nentry->subjectEntityId = %d\n", __LINE__, entry->subjectEntityId);
     entity = &state->entitiesInfo.subjectEntities[entry->subjectEntityId];
 
     for (int i = 0; i < MAX_SUBS_NUM; i++)
@@ -669,6 +680,135 @@ oqtd_insert_sorted(List **oqtd, OqtdItem *new_item)
 
     /* If ts is the largest, add it to the end */
     *oqtd = lappend(*oqtd, new_item);
+}
+
+/*
+ * Helper function for finding or creating entry + entity for subject
+ * 
+ * Returns: pointer to the initialized entry
+ * 
+ * key - key of the entry
+ * create_new - create new entry if doesn't exist or not
+ */
+static mssEntry *
+find_or_create_subject_entry(const char *key, bool create_new)
+{
+	mssSharedState *state =
+        monSubSysLocal.MonSubSystem_SharedState;
+
+    bool found;
+    mssEntry *entry;
+	HASHACTION hash_action = create_new ? HASH_ENTER_NULL : HASH_FIND;
+	int subject_entity_id = -1;
+
+    entry = hash_search(state->mss_hash,
+                        key,
+                        hash_action,
+                        &found);
+
+	/* if entry already exists and is initialized*/
+	// if ((hash_action == HASH_FIND && entry)
+	// 	|| (hash_action == HASH_ENTER_NULL && found))
+	// {
+	// 	elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nEntry found\nkey = %s\n", __LINE__, key);
+	// 	return entry;
+	// } else if (hash_action == HASH_FIND && entry == NULL)
+	// {
+	// 	elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nEntry DOESN'T found\nkey = %s\n", __LINE__, key);
+	// 	return NULL;
+	// } else if (hash_action == HASH_ENTER_NULL && !found)
+	// {
+    // 	elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nNew entry was created with the key %s\n", __LINE__, key);
+	// 	/* 
+	// 	 * If we're here, we need to find place for new entry
+	// 	 * in SubjectEntity array
+	// 	 *  
+	// 	 * 
+	// 	 */
+	// 	for (int i = 0; i < MAX_SUBJECT_NUM; i++)
+	// 	{
+	// 		SubjectEntity *subj = &monSubSysLocal.MonSubSystem_SharedState->entitiesInfo.subjectEntities[i];
+	// 		SpinLockAcquire(&subj->mutex);
+	// 		if (subj->used == true) {
+	// 			SpinLockRelease(&subj->mutex);
+	// 			continue;
+	// 		}
+	// 		subject_entity_id = i;
+	// 		subj->used = true;
+	// 		subj->_routingType = ANYCAST;
+	// 		SpinLockRelease(&subj->mutex);
+	// 		break;
+	// 	}
+	// 	if (subject_entity_id == -1)
+	// 	{
+	// 		elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nkey = %s\nNOT ENOUGH PLACE IN subjectEntities\n", __LINE__, key);
+	// 		entry->subjectEntityId = subject_entity_id;
+	// 		return entry;
+	// 	} else {
+	// 		hash_search(state->mss_hash,
+    //                     key,
+    //                     HASH_REMOVE,
+    //                     &found);
+	// 		return NULL;
+	// 	}
+	// } 
+	// elog(ERROR, "MONITOR_PROCESS\nUNEXPECTED CASE line %d\n", __LINE__);	
+
+	if (!create_new)
+	{
+		elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nEntry was created or not... (Entry == NULL)? = %d\nkey = %s\n", __LINE__, entry == NULL, key);
+		return entry; /* NULL or existing */
+	} 
+	
+	if (found)
+	{
+		elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nEntry found\nkey = %s\n", __LINE__, key);
+		return entry;
+	} 
+	/* So we created (if was possible) new entry */
+	
+	/* if there wasn't place in hash*/
+	if (entry == NULL) {
+		elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nkey = %s\nNOT ENOUGH PLACE IN hash\n", __LINE__, key);
+		return NULL;
+	}
+	elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nNew entry was created with the key %s\n", __LINE__, key);
+	/* 
+		* If we're here, we need to find place for new entry
+		* in SubjectEntity array
+		*  
+		* 
+		*/
+	for (int i = 0; i < MAX_SUBJECT_NUM; i++)
+	{
+		SubjectEntity *subj = &monSubSysLocal.MonSubSystem_SharedState->entitiesInfo.subjectEntities[i];
+
+		SpinLockAcquire(&subj->mutex);
+		if (subj->used == true) {
+			SpinLockRelease(&subj->mutex);
+			continue;
+		}
+		subject_entity_id = i;
+
+		subj->used = true;
+		subj->_routingType = ANYCAST;
+
+		SpinLockRelease(&subj->mutex);
+		break;
+	}
+
+	if (subject_entity_id != -1)
+	{
+		entry->subjectEntityId = subject_entity_id;
+		return entry;
+	} else {
+		elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nkey = %s\nNOT ENOUGH PLACE IN subjectEntities\n", __LINE__, key);
+		hash_search(state->mss_hash,
+					key,
+					HASH_REMOVE,
+					&found);
+		return entry;
+	}
 }
 
 

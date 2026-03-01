@@ -77,11 +77,13 @@ typedef enum
 
 typedef struct _subjectEnity
 {
+	bool used;
 	routing_type _routingType;
 
 	// пусть подписчики будут битовой маской
 	pg_atomic_uint64 bitmap_subs[MAX_SUBS_BIT_NUM];
 
+	slock_t mutex;
 	// // или так, я пока не решила
 	// LWLock lock;
 	// uint64 bitmap[MAX_SUBS_BIT_NUM];
