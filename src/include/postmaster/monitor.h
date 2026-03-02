@@ -69,10 +69,12 @@
 #define MAX_MONITOR_MESSAGE_LEN 64
 #define MONITOR_TIMEOUT 300
 
+/* Is it needed at all?? */
 typedef enum
 {
 	ANYCAST,
 	MULTICAST,
+	UNDEFINED, /* It's for the case if subject was initialized by publisher */
 } routing_type;
 
 typedef struct _subjectEnity
@@ -228,6 +230,7 @@ typedef struct mssSharedState
 	shm_toc *channels_toc;
 
 
+	/* might be needed for channels and mss_hash */
 	LWLock lock;	/* protects hashtable search/modification */
 	HTAB *mss_hash; /* hashtable for SubjectKey - SubjectEntity */
 
@@ -283,5 +286,7 @@ extern Size MonitorShmemSize(void);
  * this needed to be included to CreateOrAttachShmemStructs in src\backend\storage\ipc\ipci.c
  */
 extern void MonitorShmemInit(void);
+
+mssEntry *find_or_create_subject_entry(const char *key, bool create_new);
 
 #endif /* _MONITOR_H */

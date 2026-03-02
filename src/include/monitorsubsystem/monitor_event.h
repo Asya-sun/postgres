@@ -20,6 +20,7 @@ typedef enum
     MSS_ERR_INVALID_ARG,
     MSS_ERR_NOT_REGISTERED, 
     MSS_CHANNEL_WRONG_STATE,
+    MSS_UNEXPECTED_ERROR,
 
     /* Connection Error Codes */
     MSS_ERR_NO_SUBJECTS_SLOTS_AVAILABLE ,
@@ -30,6 +31,9 @@ typedef enum
     MSS_CHANNEL_BUSY,    /* Channel busy */
     MSS_NO_CHANNEL,  /* Channel is not created...(?) */
     MSS_DETACHED,       /* sender is not available (probably dead) */
+
+    /* Receive Error codes*/
+    MSS_NO_MSGS,
 } MonitorResult;
 
 
@@ -45,4 +49,5 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig);
 void pg_monitor_pub_disconnect();
 
 MonitorResult pg_monitor_notify(const char *event_name, const void *data, bool reliable);
+MonitorResult pg_monitor_receive(MonitorMsg *out_msg);
 #endif /* MONITOR_EVENT_H */

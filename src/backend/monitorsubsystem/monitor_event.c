@@ -25,8 +25,9 @@
 #define BIT_MASK(idx) (1ULL << ((idx) % 64))
 
 #define LOG_LEVEL LOG
+#define SHOULD_CREATE_NEW_ENTRY_IN_HASH_SUB true
 
-static int mss_alloc_subject_id(void);
+// static int mss_alloc_subject_id(void);
 
 /*
  * I don't know whether it's good idea to create 
@@ -67,16 +68,6 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
      * 2 создаем сам канал
      * 3 ставим в массиве подписчиков указатель на канал
      * 
-     * что про канал 
-     * - он должен располагаться в разделяемой памяти
-     * (и все, что к нему относится)
-     * 
-     * 
-     * для того, чтобы создавать КАНАЛ чисто по конфигу (то есть по типу и параметрам)
-     * и НЕ мучиться с switch-case, нужен массив структур
-     * в этом массиве структур по типу канала будет выдаваться все, что надо для создания этого канала
-     * 
-     * 
      */ 
     /* find a place for subscriber */
     int sub_id = -1;
@@ -85,6 +76,7 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
     monitor_channel *myChannel;
     MssState_SubscriberInfo *sharedSubInfo = &monSubSysLocal.MonSubSystem_SharedState->sub;
     bool is_channel_created;
+    ChannelOpResult attach_res;
 
     MonitorEnsureContext();
     MemoryContextSwitchTo(monSubSysLocal.ctx);
@@ -99,11 +91,12 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
 
     LWLockRelease(&monSubSysLocal.MonSubSystem_SharedState->lock);
 
-    LWLockAcquire(&sharedSubInfo->lock, LW_EXCLUSIVE);
+    // LWLockAcquire(&sharedSubInfo->lock, LW_EXCLUSIVE);
     
     if (sharedSubInfo->current_subs_num  == sharedSubInfo->max_subs_num)
     {
-        elog(DEBUG1, "Maximum of supported subscribers is reached, a place for new pub couldn't be allocated");
+        // LWLockRelease(&sharedSubInfo->lock);
+        elog(LOG_LEVEL, "Maximum of supported subscribers is reached, a place for new pub couldn't be allocated");
         return -1;
     }
 
@@ -135,7 +128,7 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
     
     if (sub_id == -1)
     {
-        LWLockRelease(&sharedSubInfo->lock);
+        // LWLockRelease(&sharedSubInfo->lock);
         return -1;
     }
 
@@ -145,6 +138,7 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
     conConfig->channel_id = sub_id + MAX_PUBS_NUM;
     conConfig->subscriber_procno = MyProcNumber;
     conConfig->publisher_procno = monitor_proc_no;
+    elog(LOG_LEVEL, "\npg_monitor_con_connect.c line: %d\n  publisher_procno %d\nsubscriber_procno %d\npub_id %d\nmonitor_proc_no %d\n", __LINE__, conConfig->publisher_procno, conConfig->subscriber_procno, sub_id, monitor_proc_no);
 
     elog(LOG_LEVEL, "\npg_monitor_con_connect.c line: %d\n  conConfig->channel_id %d", __LINE__, conConfig->channel_id);
     
@@ -152,10 +146,26 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
 	elog(LOG_LEVEL, "\npg_monitor_con_connect.c line: %d\n  is_channel_created %d", __LINE__, is_channel_created);
 
     if (! is_channel_created) {
-        LWLockRelease(&sharedSubInfo->lock);
+        // LWLockRelease(&sharedSubInfo->lock);
         elog(LOG_LEVEL, "Couldn't create a channel");
         return -1 ;
     }
+
+    attach_res = monitor_channel_options[conConfig->type]->attach(myChannel);
+    elog(LOG_LEVEL, "\npg_monitor_sub_connect.c line: %d\n  ATTACH_RES_RESULT %d", __LINE__, attach_res);
+    
+    if (attach_res != CH_OK)
+    {
+        // LWLockRelease(&sharedSubInfo->lock);
+        /*
+         * TODO:
+         * clear memory in case of channel can't be attached...
+         * or mind a problem
+         */
+        return -1 ;
+    }
+    elog(LOG_LEVEL, "\npg_monitor_sub_connect.c line: %d\n", __LINE__);
+
 
     /*
      * maybe it'd be easier just not to release lock 
@@ -172,7 +182,7 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
 
 
     LWLockRelease(&mySubInfo->lock);
-    LWLockRelease(&sharedSubInfo->lock);
+    // LWLockRelease(&sharedSubInfo->lock);
     
     return 0;
 }
@@ -213,7 +223,8 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
     
     if (sharedPubInfo->max_pubs_num  == sharedPubInfo->current_pubs_num)
     {
-        elog(DEBUG1, "Maximum of supported publishers is reached, a place for new pub couldn't be allocated");
+        LWLockRelease(&sharedPubInfo->lock);
+        elog(LOG_LEVEL, "Maximum of supported publishers is reached, a place for new pub couldn't be allocated");
         return -1;
     }
 
@@ -261,7 +272,7 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
 
     if (! is_channel_created) {
         LWLockRelease(&sharedPubInfo->lock);
-        elog(DEBUG1, "Couldn't create a channel");
+        elog(LOG_LEVEL, "Couldn't create a channel");
         return -1 ;
     }
 
@@ -297,7 +308,13 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
     return 0;
 }
 
-
+/*
+ * -1 means mistake
+ * It set conConfig.channel_id
+ * 
+ * TODO:
+ * think about adding SHOULD_CREATE_NEW_ENTRY_IN_HASH_SUB to args
+ */
 MonitorResult pg_monitor_subscribe_to_event(const char *event_string, routing_type _routing_type)
 {
     MonSubSystem_LocalState *local = &monSubSysLocal;
@@ -305,8 +322,8 @@ MonitorResult pg_monitor_subscribe_to_event(const char *event_string, routing_ty
     mssSharedState *shared;
     SubscriberInfo *sub;
     SubjectEntity *subject;
+    routing_type subj_rt;
     mssEntry *entry;
-    bool found;
     SubjectKey key;
     int subjectId;
     int subId;
@@ -317,20 +334,20 @@ MonitorResult pg_monitor_subscribe_to_event(const char *event_string, routing_ty
 
     if (local->mySubInfo == NULL)
     {
-        elog(DEBUG1, "Subscriber not registered");        
+        elog(LOG_LEVEL, "Subscriber not registered");        
         return MSS_ERR_NOT_REGISTERED;
     }
 
     if (event_string == NULL)
     {
-        elog(DEBUG1, "Invalid arg: string is NULL");  
+        elog(LOG_LEVEL, "Invalid arg: string is NULL");  
         return MSS_ERR_INVALID_ARG;
     }
         
 
     if (strlen(event_string) >= MAX_SUBJECT_LEN)
     {
-        elog(DEBUG1, "Invalid arg: string is too long: %ld", strlen(event_string));  
+        elog(LOG_LEVEL, "Invalid arg: string is too long: %ld", strlen(event_string));  
         return MSS_ERR_INVALID_ARG;
     }
 
@@ -342,49 +359,31 @@ MonitorResult pg_monitor_subscribe_to_event(const char *event_string, routing_ty
     memset(&key, 0, sizeof(key));
     strlcpy(key.name, event_string, MAX_SUBJECT_LEN);
 
-    LWLockAcquire(&shared->lock, LW_EXCLUSIVE);
+    entry = find_or_create_subject_entry(key.name, SHOULD_CREATE_NEW_ENTRY_IN_HASH_SUB);
 
-
-    entry = hash_search(shared->mss_hash,
-                    (void *) &key,
-                    HASH_FIND,
-                    &found);
-
-    if (!found)
-    {
-        subjectId = mss_alloc_subject_id();
-        if (subjectId == -1)
-        {
-            LWLockRelease(&shared->lock);
-            elog(DEBUG1, "No free subject slots"); 
-            return MSS_ERR_NO_SUBJECTS_SLOTS_AVAILABLE;
-        }
-
-        subject = &entitiesInfo->subjectEntities[subjectId];
-        subject->_routingType = _routing_type;
-
-        for (int w = 0; w < MAX_SUBS_BIT_NUM; w++)
-            pg_atomic_write_u64(&subject->bitmap_subs[w], 0);
-
-        entry = hash_search(shared->mss_hash,
-                            (void *) &key,
-                            HASH_ENTER,
-                            &found);
-        Assert(!found);
-
-        entry->subjectEntityId = subjectId;
+    if (entry == NULL && SHOULD_CREATE_NEW_ENTRY_IN_HASH_SUB == true) {
+        return MSS_ERR_NO_SUBJECTS_SLOTS_AVAILABLE;
+    } else if (entry == NULL && SHOULD_CREATE_NEW_ENTRY_IN_HASH_SUB == false) {
+        return MSS_ERR_NOT_REGISTERED;
     }
-    else
-    {
-        subjectId = entry->subjectEntityId;
-        subject = &entitiesInfo->subjectEntities[subjectId];
+    
+    /* entry != NULL */
+    elog(LOG_LEVEL, "\npg_monitor_subscribe_to_event line %d\nEntry with the key %s already exists\n", __LINE__, key.name);
+    subjectId = entry->subjectEntityId;
+    subject = &entitiesInfo->subjectEntities[subjectId];
 
-        if (subject->_routingType != _routing_type)
-        {
-            LWLockRelease(&shared->lock);
-            elog(DEBUG1, "Routing type mismatch"); 
-            return MSS_ERR_ROUTING_MISMATCH;
-        }
+    SpinLockAcquire(&subject->mutex);
+    subj_rt = subject->_routingType;
+    SpinLockRelease(&subject->mutex);
+
+    if (subj_rt != UNDEFINED && subject->_routingType != _routing_type)
+    {
+        elog(LOG_LEVEL, "Routing type mismatch"); 
+        return MSS_ERR_ROUTING_MISMATCH;
+    } else {
+        SpinLockAcquire(&subject->mutex);
+        subject->_routingType = _routing_type;
+        SpinLockRelease(&subject->mutex);
     }
 
     /* update SubjectEntity bitmap */
@@ -405,7 +404,6 @@ MonitorResult pg_monitor_subscribe_to_event(const char *event_string, routing_ty
     sub->bitmap[subj_word] |= subj_mask;
 
     LWLockRelease(&sub->lock);
-    LWLockRelease(&shared->lock);
 
     return MSS_OK;
 }
@@ -413,33 +411,29 @@ MonitorResult pg_monitor_subscribe_to_event(const char *event_string, routing_ty
 
 
 
-/* 
- * Helper func for pg_monitor_subscribe_to_event()
- * 
- * MUST be called under local->MonSubSystem_SharedState->lock
- */
-static int
-mss_alloc_subject_id(void)
-{
-    MssState_SubjectEntitiesInfo *entitiesInfo = &monSubSysLocal.MonSubSystem_SharedState->entitiesInfo;
-
-    for (int i = entitiesInfo->next_subject_hint; i < MAX_SUBJECT_NUM; i++)
-    {
-        int word = BIT_WORD(i);
-        uint64 mask = BIT_MASK(i);
-
-        uint64 old =
-        pg_atomic_fetch_or_u64(&entitiesInfo->subject_used[word], mask);
-
-        if ((old & mask) == 0)
-        {
-            entitiesInfo->next_subject_hint++;
-            return i;
-        }
-
-    }
-    return -1;
-}
+// /* 
+//  * Helper func for pg_monitor_subscribe_to_event()
+//  * 
+//  * MUST be called under local->MonSubSystem_SharedState->lock
+//  */
+// static int
+// mss_alloc_subject_id(void)
+// {
+//     MssState_SubjectEntitiesInfo *entitiesInfo = &monSubSysLocal.MonSubSystem_SharedState->entitiesInfo;
+//     for (int i = entitiesInfo->next_subject_hint; i < MAX_SUBJECT_NUM; i++)
+//     {
+//         int word = BIT_WORD(i);
+//         uint64 mask = BIT_MASK(i);
+//         uint64 old =
+//         pg_atomic_fetch_or_u64(&entitiesInfo->subject_used[word], mask);
+//         if ((old & mask) == 0)
+//         {
+//             entitiesInfo->next_subject_hint++;
+//             return i;
+//         }
+//     }
+//     return -1;
+// }
 
 // в случае, если не удалось уведомить о событии, быстро возврщает управление
 /*
@@ -516,3 +510,64 @@ MonitorResult pg_monitor_notify(const char *event_name, const void *data, bool r
     }
 }
 
+MonitorResult
+pg_monitor_receive(MonitorMsg *out_msg)
+{
+    monitor_channel *ch;
+    ChannelOpResult recv_result;
+    Size out_len = 0;
+
+    if (out_msg == NULL)
+        return MSS_ERR_INVALID_ARG;
+
+    if (monSubSysLocal.mySubInfo == NULL)
+        return MSS_ERR_NOT_REGISTERED;
+
+    ch = monSubSysLocal.mySubInfo->channel;
+
+    if (ch == NULL)
+        return MSS_NO_CHANNEL;
+
+    SpinLockAcquire(&ch->mutex);
+    if (ch->state != CH_ACTIVE)
+    {
+        SpinLockRelease(&ch->mutex);
+        return MSS_CHANNEL_WRONG_STATE;
+    }
+    SpinLockRelease(&ch->mutex);
+        
+
+    recv_result = ch->ops->receive_one_msg(ch,
+                                           out_msg,
+                                           sizeof(MonitorMsg),
+                                           &out_len);
+
+    switch (recv_result)
+    {
+        case CH_OK:
+
+            /* sanity check */
+            if (out_len != sizeof(MonitorMsg))
+            {
+                elog(WARNING, "pg_monitor_receive: unexpected message size: %ld",
+                     out_len);
+                return CH_UNEXPECTED_ERROR;
+            }
+
+            return MSS_OK;
+
+        case CH_RECV_CLOSED:
+            return MSS_DETACHED;
+
+
+        case CH_RECV_EMPTY:
+            return MSS_NO_MSGS;
+        case CH_INVALID_ARG:
+            return MSS_ERR_INVALID_ARG;
+        case CH_UNEXPECTED_ERROR:
+        default:
+            elog(LOG_LEVEL,
+                 "pg_monitor_receive: unexpected receive result");
+            return MSS_UNEXPECTED_ERROR;
+    }
+}

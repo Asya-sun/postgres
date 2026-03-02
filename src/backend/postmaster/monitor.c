@@ -65,7 +65,6 @@ static void oqtd_insert_sorted(List **oqtd, OqtdItem *new_item);
 static void read_msgs_from_channel(int qid, List **oqtd, int current_pn);
 static void deliver_from_oqtd(List **oqtd, int current_pn, int last_processed_queue);
 static void deliver_message_to_subscribers(MonitorMsg *msg);
-static mssEntry* find_or_create_subject_entry(const char *key, bool create_new);
 
 Size mss_subscriberInfo_size(void)
 {
@@ -340,6 +339,7 @@ void MonitorShmemInit(void)
 void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 {
 	int current_pn = 0;
+	int cnt = 0;
 	int last_processed_queue = 0;
 	List *oqtd = NIL;
     monitor_channel *channels = monSubSysLocal.MonSubSystem_SharedState->channels;	
@@ -419,17 +419,18 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 	for (;;)
 	{
 		int ch_count = 0;
-		int cnt = 0;
 		int rc;
 		bool setqueues[MAX_MONITOR_CHANNELS_NUM];
 		elog(LOG, "\nMONITOR_PROCESS_ %d\n",  cnt);
 		cnt++;
+		current_pn++;
 		// elog(LOG, "the most beatiful cycle ever!!!");
 		// /* 3 sec */
 		// pg_usleep(1000L * 1000L * 3L);
 
 		memset(setqueues, 0, sizeof(setqueues));
 
+		ResetLatch(MyLatch);
 		/*
 		 * WaitLatch si enough for current uses, but
 		 * in the future, if any other types of channels appear,
@@ -442,7 +443,7 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 		 */
 		rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH, MONITOR_TIMEOUT, 0);
 		/* lil question is when to reset it - mb after checking all channels? */
-		ResetLatch(MyLatch);
+		
 		
 		if (rc & WL_EXIT_ON_PM_DEATH) {
 			elog(LOG, "\nMONITOR_PROCESS_ POSTMASTER DEAD\n");
@@ -454,7 +455,6 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 			elog(LOG, "\nMONITOR_PROCESS_ LATCH TIMEOUT\n");
 			last_processed_queue = MAX_MONITOR_CHANNELS_NUM;
 			deliver_from_oqtd(&oqtd, current_pn, last_processed_queue);
-			current_pn++;
 			continue;
 		}
 
@@ -498,8 +498,6 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 			}
 			SpinLockRelease(&ch->mutex);
 		}
-		
-		current_pn++;
 
 		if (ch_count > 0)
 		{
@@ -600,12 +598,10 @@ deliver_message_to_subscribers(MonitorMsg *msg)
     mssSharedState *state =
         monSubSysLocal.MonSubSystem_SharedState;
 
-    bool found;
     mssEntry *entry;
 	SubjectEntity *entity;
-	HASHACTION hash_action = SHOULD_CREATE_NEW_ENTRY_IN_HASH ? HASH_ENTER_NULL : HASH_FIND;
 
-	entry = find_or_create_subject_entry(&msg->key.name, SHOULD_CREATE_NEW_ENTRY_IN_HASH);
+	entry = find_or_create_subject_entry(msg->key.name, SHOULD_CREATE_NEW_ENTRY_IN_HASH);
 
 	if (entry == NULL)
 	{
@@ -690,9 +686,10 @@ oqtd_insert_sorted(List **oqtd, OqtdItem *new_item)
  * key - key of the entry
  * create_new - create new entry if doesn't exist or not
  */
-static mssEntry *
+mssEntry *
 find_or_create_subject_entry(const char *key, bool create_new)
 {
+    mssSharedState *shared = monSubSysLocal.MonSubSystem_SharedState;
 	mssSharedState *state =
         monSubSysLocal.MonSubSystem_SharedState;
 
@@ -701,11 +698,13 @@ find_or_create_subject_entry(const char *key, bool create_new)
 	HASHACTION hash_action = create_new ? HASH_ENTER_NULL : HASH_FIND;
 	int subject_entity_id = -1;
 
+	LWLockAcquire(&shared->lock, LW_EXCLUSIVE);
     entry = hash_search(state->mss_hash,
                         key,
                         hash_action,
                         &found);
 
+    LWLockRelease(&shared->lock);
 	/* if entry already exists and is initialized*/
 	// if ((hash_action == HASH_FIND && entry)
 	// 	|| (hash_action == HASH_ENTER_NULL && found))
@@ -791,7 +790,7 @@ find_or_create_subject_entry(const char *key, bool create_new)
 		subject_entity_id = i;
 
 		subj->used = true;
-		subj->_routingType = ANYCAST;
+		subj->_routingType = UNDEFINED;
 
 		SpinLockRelease(&subj->mutex);
 		break;
@@ -803,10 +802,13 @@ find_or_create_subject_entry(const char *key, bool create_new)
 		return entry;
 	} else {
 		elog(LOG_LEVEL, "MONITOR_PROCESS line %d\nkey = %s\nNOT ENOUGH PLACE IN subjectEntities\n", __LINE__, key);
+		LWLockAcquire(&shared->lock, LW_EXCLUSIVE);
 		hash_search(state->mss_hash,
 					key,
 					HASH_REMOVE,
 					&found);
+		
+        LWLockRelease(&shared->lock);
 		return entry;
 	}
 }

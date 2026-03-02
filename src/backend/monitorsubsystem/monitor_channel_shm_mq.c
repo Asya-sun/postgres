@@ -134,43 +134,41 @@ shm_mq_channel_attach(monitor_channel *ch)
     {
         elog(LOG_LEVEL, "\nshm_mq_channel_attach \nINVALID publisher procno: %d", ch->publisher_procno);
         return CH_INVALID_ARG;
-    } else {
-        elog(LOG_LEVEL, "\nshm_mq_channel_attach \nCorrect publisher procno: %d", ch->publisher_procno);  
     }
 
     if (ch->subscriber_procno < 0 || ch->subscriber_procno >= ProcGlobal->allProcCount) 
     {
         elog(LOG_LEVEL, "\nshm_mq_channel_attach \nINVALID subscriber procno: %d", ch->subscriber_procno);
         return CH_INVALID_ARG;
-    } else {
-        elog(LOG_LEVEL, "\nshm_mq_channel_attach \nCorrect subscriber procno: %d", ch->subscriber_procno); 
     }
 
 	/* Here shold be smth with MemoryContext */
     local = palloc0(sizeof(ShmMqChannelLocal));
     local->handle = shm_mq_attach(data->mq, NULL, NULL);
 
-    SpinLockAcquire(&ch->mutex);
     if (AmMonitorSubsystemProcess()) 
     {
         int channel_id;
-        elog(LOG_LEVEL, "\nshm_mq_channel_attach MONITOR PROCESS line: %d\n", __LINE__);
         Assert(ch >= &shared_channels[0] && ch <  &shared_channels[MAX_MONITOR_CHANNELS_NUM - 1]);
         
         channel_id = ch- shared_channels; 
         monSubSysLocal.monitorLocal.channelsLocalData[channel_id] = local;
+        SpinLockAcquire(&ch->mutex);
         ch->attach_flags |= CH_ATTACH_MONITOR;
+        SpinLockRelease(&ch->mutex);
     } else {
-        elog(LOG_LEVEL, "\nshm_mq_channel_attach CLIENT PROCESS line: %d\n", __LINE__);
         if (MyProcNumber == ch->subscriber_procno) {
             monSubSysLocal.subLocalData = local;
         }
         else {
             monSubSysLocal.pubLocalData = local;
         }
+        SpinLockAcquire(&ch->mutex);
         ch->attach_flags |= CH_ATTACH_CLIENT;
+        SpinLockRelease(&ch->mutex);
     }
 
+    SpinLockAcquire(&ch->mutex);
     if (channel_is_ready(ch->attach_flags))
     {
         elog(LOG_LEVEL, "\nshm_mq_channel_attach line: %d\n CHANNEL IS READY\n", __LINE__);
@@ -192,18 +190,30 @@ shm_mq_channel_send_msg(monitor_channel *ch, const void *data, Size len, bool no
     ShmMqChannelLocal *local;
 	shm_mq_result result;
 
-    local = (ShmMqChannelLocal *)
+    if (AmMonitorSubsystemProcess())
+    {
+        int channel_id;
+        monitor_channel *shared_channels = monSubSysLocal.MonSubSystem_SharedState->channels;
+        
+        elog(LOG_LEVEL, "\nshm_mq_channel_send_msg MONITOR PROCESS line: %d\n", __LINE__);
+        Assert(ch >= &shared_channels[0] && ch <  &shared_channels[MAX_MONITOR_CHANNELS_NUM - 1]);
+        
+        channel_id = ch- shared_channels; 
+        local = monSubSysLocal.monitorLocal.channelsLocalData[channel_id];
+    } else {
+        /* Берём локальный handle */
+        local = (ShmMqChannelLocal *)
         monSubSysLocal.pubLocalData;
-
-    Assert(local && local->handle);
+        Assert(local && local->handle);
+    }
 
     
-
     result = shm_mq_send(local->handle,
                          len,
                          data,
                          nowait,
                          true); /* force_flush */
+    elog(LOG_LEVEL, "\nshm_mq_channel_send_msg line: %d\nSEND_RESULT = %d\n", __LINE__, result);
 
 	switch (result)
 	{
