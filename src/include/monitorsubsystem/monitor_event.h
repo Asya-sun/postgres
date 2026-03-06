@@ -18,7 +18,7 @@ typedef enum
 
     /* Generic error codes */
     MSS_ERR_INVALID_ARG,
-    MSS_ERR_NOT_REGISTERED, 
+    MSS_ERR_NOT_REGISTERED, /* user isn't registered in MSS */ 
     MSS_CHANNEL_WRONG_STATE,
     MSS_UNEXPECTED_ERROR,
 
@@ -42,7 +42,7 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig);
 void pg_monitor_con_disconnect();
 
 MonitorResult pg_monitor_subscribe_to_event(const char *event_string, routing_type _routing_type);
-void pg_monitor_unsubscribe_from_event(const char *event_string);
+MonitorResult pg_monitor_unsubscribe_from_event(const char *event_string);
 
 // pub = Publisher
 int pg_monitor_pub_connect(MonitorChannelConfig *conConfig);

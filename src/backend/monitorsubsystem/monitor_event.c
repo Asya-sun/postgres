@@ -308,6 +308,103 @@ int pg_monitor_pub_connect(MonitorChannelConfig *conConfig)
     return 0;
 }
 
+void
+pg_monitor_con_disconnect(void)
+{
+    MonSubSystem_LocalState *local = &monSubSysLocal;
+    SubscriberInfo *sub = local->mySubInfo;
+    monitor_channel *ch;
+    MssState_SubscriberInfo *sharedSubInfo = &local->MonSubSystem_SharedState->sub;
+    int sub_id;
+
+    if (local->mySubInfo == NULL)
+        return;
+
+    sub_id = sub - sharedSubInfo->subscribers;
+    Assert(sub_id >= 0 && sub_id <  MAX_SUBS_NUM);
+
+    LWLockAcquire(&sub->lock, LW_EXCLUSIVE);
+
+    ch = sub->channel;
+
+    if (ch != NULL)
+    {
+        if (ch->ops && ch->ops->detach)
+            ch->ops->detach(ch, local->subLocalData);
+
+        if (ch->ops && ch->ops->cleanup)
+            ch->ops->cleanup(ch);
+
+        sub->channel = NULL;
+    }
+    monitor_remove_subscriber_from_all_subjects(sub_id);
+
+    /* Cleanup subscriptions bitmap  */
+    memset(sub->bitmap, 0, sizeof(sub->bitmap));
+
+    sub->id = -1;
+    sub->proc_pid = 0;
+
+    LWLockRelease(&sub->lock);
+
+    LWLockAcquire(&sharedSubInfo->lock, LW_EXCLUSIVE);
+    if (sharedSubInfo->current_subs_num > 0)
+        sharedSubInfo->current_subs_num--;
+    LWLockRelease(&sharedSubInfo->lock);
+
+    local->mySubInfo = NULL;
+}
+
+void
+pg_monitor_pub_disconnect(void)
+{
+    MonSubSystem_LocalState *local = &monSubSysLocal;
+    PublisherInfo *pub;
+    monitor_channel *ch;
+    MssState_PublisherInfo *sharedPubInfo;
+
+    if (local->myPubInfo == NULL)
+        return;
+
+    pub = local->myPubInfo;
+    sharedPubInfo = &local->MonSubSystem_SharedState->pub;
+
+    SpinLockAcquire(&pub->mutex);
+
+    ch = pub->channel;
+    SpinLockRelease(&pub->mutex);
+
+    if (ch != NULL)
+    {
+        if (ch->ops && ch->ops->detach)
+            ch->ops->detach(ch, local->pubLocalData);
+
+        if (ch->ops && ch->ops->cleanup)
+            ch->ops->cleanup(ch);
+
+        SpinLockAcquire(&pub->mutex);
+
+        pub->channel = NULL;
+        
+        SpinLockRelease(&pub->mutex);
+    }
+
+    SpinLockAcquire(&pub->mutex);
+
+    pub->id = -1;
+    pub->proc_pid = 0;
+
+    SpinLockRelease(&pub->mutex);
+
+    LWLockAcquire(&sharedPubInfo->lock, LW_EXCLUSIVE);
+    if (sharedPubInfo->current_pubs_num > 0)
+        sharedPubInfo->current_pubs_num--;
+    LWLockRelease(&sharedPubInfo->lock);
+
+    local->myPubInfo = NULL;
+}
+
+
 /*
  * -1 means mistake
  * It set conConfig.channel_id
@@ -408,7 +505,120 @@ MonitorResult pg_monitor_subscribe_to_event(const char *event_string, routing_ty
     return MSS_OK;
 }
 
+MonitorResult pg_monitor_unsubscribe_from_event(const char *event_string)
+{
+    MonSubSystem_LocalState *local = &monSubSysLocal;
+    MssState_SubjectEntitiesInfo *entitiesInfo;
+    mssSharedState *shared;
+    SubscriberInfo *sub;
+    SubjectEntity *subject;
+    mssEntry *entry;
+    SubjectKey key;
+    int subjectId;
+    int subId;
+    int word;
+    uint64 mask;
+    int subj_word;
+    uint64 subj_mask;
+    uint64 oldval;
+    uint64 newval;
 
+    if (local->mySubInfo == NULL)
+    {
+        elog(LOG_LEVEL, "Subscriber not registered");        
+        return MSS_ERR_NOT_REGISTERED;
+    }
+
+    if (event_string == NULL)
+    {
+        elog(LOG_LEVEL, "Invalid arg: string is NULL");  
+        return MSS_ERR_INVALID_ARG;
+    }
+        
+
+    if (strlen(event_string) >= MAX_SUBJECT_LEN)
+    {
+        elog(LOG_LEVEL, "Invalid arg: string is too long: %ld", strlen(event_string));  
+        return MSS_ERR_INVALID_ARG;
+    }
+
+    sub = local->mySubInfo;
+    shared = local->MonSubSystem_SharedState;
+    entitiesInfo = &shared->entitiesInfo;
+
+
+    memset(&key, 0, sizeof(key));
+    strlcpy(key.name, event_string, MAX_SUBJECT_LEN);
+
+    entry = find_or_create_subject_entry(key.name, false);
+
+    if (entry == NULL) {
+        /*
+         * TODO:
+         * think about what error should be returned 
+         * or just MSS_OK??
+         */
+
+        return MSS_OK;
+    }
+
+    /* entry != NULL */
+    elog(LOG_LEVEL, "\npg_monitor_unsubscribe_to_event line %d\nEntry with the key %s already exists\n", __LINE__, key.name);
+    subjectId = entry->subjectEntityId;
+    subject = &entitiesInfo->subjectEntities[subjectId];
+
+    subId = sub->id;
+
+    word = BIT_WORD(subId);
+    mask = BIT_MASK(subId);
+
+    subj_word = BIT_WORD(subjectId);
+    subj_mask = BIT_MASK(subjectId);
+
+    /*
+     * Check if subscribed
+     */
+
+    LWLockAcquire(&sub->lock, LW_SHARED);
+
+    if ((sub->bitmap[subj_word] & subj_mask) == 0)
+    {
+        LWLockRelease(&sub->lock);
+        /*
+         * TODO:
+         * think about what error should be returned 
+         * or just MSS_OK??
+         */
+        return MSS_OK;
+    }
+
+    LWLockRelease(&sub->lock);
+
+    /*
+     * Update SubjectEntity bitmap_subs
+     */
+
+    do
+    {
+        oldval = pg_atomic_read_u64(&subject->bitmap_subs[word]);
+        newval = oldval & ~mask;
+    }
+    while (!pg_atomic_compare_exchange_u64(&subject->bitmap_subs[word],
+                                           &oldval,
+                                           newval));
+
+    /*
+     * Update SubscriberInfo bitmap
+     */
+
+    LWLockAcquire(&sub->lock, LW_EXCLUSIVE);
+
+    sub->bitmap[subj_word] &= ~subj_mask;
+
+    LWLockRelease(&sub->lock);
+
+    return MSS_OK;
+}
 
 
 // /* 
@@ -569,5 +779,70 @@ pg_monitor_receive(MonitorMsg *out_msg)
             elog(LOG_LEVEL,
                  "pg_monitor_receive: unexpected receive result");
             return MSS_UNEXPECTED_ERROR;
+    }
+}
+
+
+/*
+ * Helper function for pg_monitor_con_disconnect()
+ * 
+ * Is must be used under &sub->lock
+ */
+static void
+monitor_remove_subscriber_from_all_subjects(int sub_id)
+{
+    MssState_SubjectEntitiesInfo *subjInfo = &monSubSysLocal.MonSubSystem_SharedState->entitiesInfo;
+    SubscriberInfo *sub = &monSubSysLocal.MonSubSystem_SharedState->sub.subscribers[sub_id];
+
+    int word = sub_id / 64;
+    uint64 mask = ((uint64)1 << (sub_id % 64));
+
+    /* iterate through all subjects*/
+    for (int i = 0; i < MAX_SUBJECT_NUM; i++)
+    {
+        int subj_word = BIT_WORD(i);
+        uint64 subj_mask = BIT_MASK(i);
+        SubjectEntity *subject = &subjInfo->subjectEntities[i];
+        uint64 oldval;
+        uint64 newval;
+
+        /*
+        * Check if subscribed
+        */
+
+        // LWLockAcquire(&sub->lock, LW_EXCLUSIVE);
+
+        if ((sub->bitmap[subj_word] & subj_mask) == 0)
+        {
+            // LWLockRelease(&sub->lock);
+            /*
+                * TODO:
+                * think about what error should be returned 
+                * or just MSS_OK??
+                */
+            continue;
+        }
+
+        /* Subscribed! */
+
+        do
+        {
+            oldval = pg_atomic_read_u64(&subject->bitmap_subs[word]);
+            newval = oldval & ~mask;
+        }
+        while (!pg_atomic_compare_exchange_u64(&subject->bitmap_subs[word],
+                                               &oldval,
+                                               newval));
+
+        /*
+         * Update SubscriberInfo bitmap
+         * 
+         * TODO:
+         * think about whether it needed at all
+         */
+
+        sub->bitmap[subj_word] &= ~subj_mask;
+
+        // LWLockRelease(&sub->lock);
     }
 }

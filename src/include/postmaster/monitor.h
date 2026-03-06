@@ -162,6 +162,15 @@ typedef struct PublisherInfo
 	slock_t mutex;
 } PublisherInfo;
 
+/*
+ * TODO:
+ * it seems like it'd better max_subs_num, current_subs_num
+ * should be pg_atomic_uint16 or slock_t instead of LWLock
+ * (bc LWLock lock appeared in SubscriberInfo, so this lock
+ * is needed only when updating max_subs_num and current_subs_num)
+ * 
+ * SAME to MssState_PublisherInfo
+ */
 typedef struct MssState_SubscriberInfo
 {
 	LWLock lock;
