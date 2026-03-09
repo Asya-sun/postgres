@@ -458,7 +458,7 @@ extern PGDLLIMPORT PGPROC *PreparedXactProcs;
  * only need 6 slots.
  */
 #define MAX_IO_WORKERS          32
-#define NUM_AUXILIARY_PROCS		(6 + MAX_IO_WORKERS)
+#define NUM_AUXILIARY_PROCS		(7 + MAX_IO_WORKERS)
 
 
 /* configurable options */
