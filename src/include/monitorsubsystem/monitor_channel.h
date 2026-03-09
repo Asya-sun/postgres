@@ -6,6 +6,8 @@
  * Channels for monitoring susbsystem must be created by publishers
  * and subscribers-processes, not by monitor process
  * 
+ * The calling process must be a publisher or a subscriber?
+ * 
  * IDENTIFICATION
  *	  src/include/monitorsubsystem/monitor_channel.h
  *
@@ -55,11 +57,11 @@ typedef enum
     /* Send error codes */
     CH_SEND_WOULD_BLOCK,
     CH_SEND_DETACHED,
-    // CH_SEND_NOT_READY,
 
     /* Common error codes */
     CH_UNEXPECTED_ERROR,
     CH_INVALID_ARG,
+    CH_NOT_ATTACHED,
 } ChannelOpResult;
 
 typedef enum

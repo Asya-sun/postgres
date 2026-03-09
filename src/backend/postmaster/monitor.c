@@ -414,7 +414,8 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 	monSubSysLocal.monitorLocal.channelsLocalData = palloc0(sizeof(void*) * MAX_MONITOR_CHANNELS_NUM);
 
 	/*
-	 * тут должна быть основная логика (бесконечный цикл с логикой обработки сообщений)
+	 * TODO:
+	 * think how to process if there are detached or closed channels
 	 */
 	for (;;)
 	{
@@ -437,12 +438,14 @@ void MonitoringProcessMain(const void *startup_data, size_t startup_data_len)
 		 * it may be necessary to use WaitEventSetWait or WaitLatchOrSocket
 		 * (if there is any type of channel that will work
 		 * on sockets)
-		 * 
-		 * TODO:
-		 * разобраться, что за wait_event_info...
 		 */
 		rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH, MONITOR_TIMEOUT, 0);
-		/* lil question is when to reset it - mb after checking all channels? */
+		/* 
+		 * 
+		 * TODO:
+		 * think about when to reset it - 
+		 * mb after checking all channels? 
+		 */
 		
 		
 		if (rc & WL_EXIT_ON_PM_DEATH) {

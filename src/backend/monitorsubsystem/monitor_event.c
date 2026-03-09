@@ -27,8 +27,6 @@
 #define LOG_LEVEL LOG
 #define SHOULD_CREATE_NEW_ENTRY_IN_HASH_SUB true
 
-// static int mss_alloc_subject_id(void);
-
 /*
  * I don't know whether it's good idea to create 
  * monitorsubsystem/monitor_channel_type.c
@@ -62,13 +60,13 @@ MonitorEnsureContext(void)
 int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
 {
     /*
-     * тут мы передаем конфиш (в нем тип канала и нужные опции)
-     * после этого
-     * 1 ищем место в массиве подписчиков и там регаемся
-     * 2 создаем сам канал
-     * 3 ставим в массиве подписчиков указатель на канал
+     * here we pass the config (it contains the channel type and the necessary options)
+     * after that
+     * 1 we are looking for a place in the subscribers array and register there
+     * 2 create the channel itself
+     * 3 we put a pointer to the channel in the subscribers array.
      * 
-     */ 
+     */
     /* find a place for subscriber */
     int sub_id = -1;
     int monitor_proc_no;
@@ -156,22 +154,35 @@ int pg_monitor_con_connect(MonitorChannelConfig *conConfig)
     
     if (attach_res != CH_OK)
     {
+        bool res;
         // LWLockRelease(&sharedSubInfo->lock);
-        /*
+        if (myChannel->ops && myChannel->ops->cleanup)
+            myChannel->ops->cleanup(myChannel);
+
+        /* Clear shared structures */
+        /* 
          * TODO:
-         * clear memory in case of channel can't be attached...
-         * or mind a problem
+         * think what's better ???
+         * It seems like it would be better to wait,
+         * bc I can't now see what might force to wait on lock
+         * for too much time, but everything's possible...
          */
+        res = LWLockAcquireOrWait(&mySubInfo->lock, LW_EXCLUSIVE);
+        // res = LWLockConditionalAcquire(&mySubInfo->lock, LW_EXCLUSIVE);
+        
+        mySubInfo->proc_pid = 0;
+        mySubInfo->id = -1;
+
+        LWLockRelease(&mySubInfo->lock);
         return -1 ;
     }
     elog(LOG_LEVEL, "\npg_monitor_sub_connect.c line: %d\n", __LINE__);
 
 
     /*
-     * maybe it'd be easier just not to release lock 
+     * TODO:
+     * think maybe it'd be easier just not to release lock 
      * immideatly after finding mySubInfo
-     *
-     * 
      */
     LWLockAcquire(&mySubInfo->lock, LW_EXCLUSIVE);
 
@@ -621,29 +632,6 @@ MonitorResult pg_monitor_unsubscribe_from_event(const char *event_string)
 }
 
 
-// /* 
-//  * Helper func for pg_monitor_subscribe_to_event()
-//  * 
-//  * MUST be called under local->MonSubSystem_SharedState->lock
-//  */
-// static int
-// mss_alloc_subject_id(void)
-// {
-//     MssState_SubjectEntitiesInfo *entitiesInfo = &monSubSysLocal.MonSubSystem_SharedState->entitiesInfo;
-//     for (int i = entitiesInfo->next_subject_hint; i < MAX_SUBJECT_NUM; i++)
-//     {
-//         int word = BIT_WORD(i);
-//         uint64 mask = BIT_MASK(i);
-//         uint64 old =
-//         pg_atomic_fetch_or_u64(&entitiesInfo->subject_used[word], mask);
-//         if ((old & mask) == 0)
-//         {
-//             entitiesInfo->next_subject_hint++;
-//             return i;
-//         }
-//     }
-//     return -1;
-// }
 
 // в случае, если не удалось уведомить о событии, быстро возврщает управление
 /*
@@ -834,12 +822,7 @@ monitor_remove_subscriber_from_all_subjects(int sub_id)
                                                &oldval,
                                                newval));
 
-        /*
-         * Update SubscriberInfo bitmap
-         * 
-         * TODO:
-         * think about whether it needed at all
-         */
+        /* Update SubscriberInfo bitmap */
 
         sub->bitmap[subj_word] &= ~subj_mask;
 

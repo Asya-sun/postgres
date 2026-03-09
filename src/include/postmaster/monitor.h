@@ -35,6 +35,10 @@
  * (MaxBackends, max_worker_processes, etc.) because they are
  * runtime parameters, not compile-time constants.
  *
+ * NOTE: 
+ * NUM_AUXILIARY_PROCS was set to 7
+ * (src/include/storage/proc.h)
+ * 
  * Current workaround: Static conservative limits.
  *
  * FIXME / QUESTION / TODO:
@@ -83,12 +87,10 @@ typedef struct _subjectEnity
 	routing_type _routingType;
 
 	// пусть подписчики будут битовой маской
+	// тк появился лок, можно попробовать использовать просто uint64
 	pg_atomic_uint64 bitmap_subs[MAX_SUBS_BIT_NUM];
 
 	slock_t mutex;
-	// // или так, я пока не решила
-	// LWLock lock;
-	// uint64 bitmap[MAX_SUBS_BIT_NUM];
 } SubjectEntity;
 
 typedef struct _subjectKey
@@ -111,8 +113,7 @@ typedef struct mssEntry
 {
 	SubjectKey key;		 /* hash key */
 	int subjectEntityId; /* id в массиве с SubectEntity */
-						 /* возможно нужна лочка */
-	/* Maybe LWLock needed */
+	/* Maybe LWLock / slock_t needed */
 
 } mssEntry;
 
@@ -243,11 +244,7 @@ typedef struct mssSharedState
 	LWLock lock;	/* protects hashtable search/modification */
 	HTAB *mss_hash; /* hashtable for SubjectKey - SubjectEntity */
 
-	/*
-	 * TODO:
-	 * Think about changing NUM_AUXILIARY_PROCS to 7
-	 * (src/include/storage/proc.h)
-	 */
+	
 	int			pgprocno; /* proc number of monitor process */
 } mssSharedState;
 

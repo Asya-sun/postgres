@@ -45,7 +45,7 @@ void shm_mq_channel_cleanup(monitor_channel *ch);
 
 ChannelOpResult shm_mq_channel_attach(monitor_channel *ch);
 
-void shm_mq_channel_detach (monitor_channel *ch, void *local);
+void shm_mq_channel_detach (monitor_channel *ch);
 
 extern const ChannelOps ShmMqChannelOps;
 
